@@ -5,3 +5,5 @@ libsql
 streamlit-drawable-canvas
 pillow
 reportlab
+plotly
+openpyxl
