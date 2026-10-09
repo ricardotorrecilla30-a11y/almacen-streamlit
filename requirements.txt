@@ -1,7 +1,7 @@
 streamlit
 pandas
 bcrypt
-libsql-experimental
+libsql
 streamlit-drawable-canvas
 pillow
 reportlab
