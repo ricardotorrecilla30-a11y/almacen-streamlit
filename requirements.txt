@@ -1,0 +1,7 @@
+streamlit
+pandas
+bcrypt
+libsql-experimental
+streamlit-drawable-canvas
+pillow
+reportlab
