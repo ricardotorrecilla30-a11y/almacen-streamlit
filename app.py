@@ -139,6 +139,16 @@ def inicializar_bd():
     ).fetchall()]
     if "disciplina" not in columnas_empleados:
         cursor.execute("ALTER TABLE empleados ADD COLUMN disciplina TEXT DEFAULT ''")
+    if "tipo_trabajador" not in columnas_empleados:
+        # Los registros anteriores quedan sin clasificar; no se supone su régimen laboral.
+        cursor.execute("ALTER TABLE empleados ADD COLUMN tipo_trabajador TEXT NOT NULL DEFAULT 'Sin clasificar'")
+
+    columnas_dotaciones = [fila[1] for fila in cursor.execute(
+        "PRAGMA table_info(dotaciones)"
+    ).fetchall()]
+    if "tipo_trabajador" not in columnas_dotaciones:
+        # Las reglas anteriores siguen aplicando a todos hasta que se clasifiquen.
+        cursor.execute("ALTER TABLE dotaciones ADD COLUMN tipo_trabajador TEXT NOT NULL DEFAULT 'Todos'")
 
     # Reposiciones
     cursor.execute("""
@@ -651,9 +661,10 @@ if opcion == "👥 Empleados":
 
     st.title("👥 Gestión de Empleados")
 
-    pestaña1, pestaña2 = st.tabs([
+    pestaña1, pestaña2, pestaña3 = st.tabs([
         "➕ Registrar empleado",
-        "📋 Consultar empleados"
+        "📋 Consultar empleados",
+        "🏷️ Clasificar trabajadores existentes"
     ])
 
     with pestaña1:
@@ -686,6 +697,12 @@ if opcion == "👥 Empleados":
                     "Disciplina"
                 )
 
+                tipo_trabajador = st.selectbox(
+                    "Tipo de trabajador *",
+                    ["Selecciona un tipo", "Sindicalizado", "Base"],
+                    help="Selecciona el régimen laboral que corresponda según los registros autorizados de TNG."
+                )
+
             with col2:
 
                 talla_camisa = st.selectbox(
@@ -712,7 +729,8 @@ if opcion == "👥 Empleados":
             if guardar:
 
                 if not numero.strip() or not nombre.strip() \
-                        or not puesto.strip() or not area.strip():
+                        or not puesto.strip() or not area.strip() \
+                        or tipo_trabajador == "Selecciona un tipo":
 
                     st.error(
                         "❌ Completa todos los campos obligatorios."
@@ -728,8 +746,8 @@ if opcion == "👥 Empleados":
                         cursor.execute("""
                             INSERT INTO empleados
                             (numero_empleado, nombre, puesto, area, disciplina,
-                             talla_camisa, talla_pantalon, fecha_ingreso)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                             talla_camisa, talla_pantalon, fecha_ingreso, tipo_trabajador)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             numero.strip(),
                             nombre.strip(),
@@ -738,7 +756,8 @@ if opcion == "👥 Empleados":
                             disciplina.strip(),
                             talla_camisa,
                             talla_pantalon,
-                            str(fecha_ingreso)
+                            str(fecha_ingreso),
+                            tipo_trabajador
                         ))
 
                         conexion.commit()
@@ -772,6 +791,7 @@ if opcion == "👥 Empleados":
                 puesto,
                 area,
                 disciplina,
+                tipo_trabajador,
                 talla_camisa,
                 talla_pantalon,
                 fecha_ingreso
@@ -795,7 +815,8 @@ if opcion == "👥 Empleados":
                     "Puesto",
                     "Área",
                     "Disciplina",
-                    "Talla camisa",
+                    "Tipo de trabajador",
+                    "Talla camisola",
                     "Talla pantalón",
                     "Fecha ingreso"
                 ]
@@ -811,6 +832,43 @@ if opcion == "👥 Empleados":
 
             st.info("No hay empleados registrados.")
 
+    with pestaña3:
+        st.subheader("Clasificar trabajadores ya registrados")
+        st.caption("Los registros anteriores se conservan. Puedes asignarles su tipo de trabajador sin volver a capturarlos.")
+        conexion = conectar()
+        trabajadores_clasificar = conexion.execute(
+            "SELECT id, numero_empleado, nombre, COALESCE(tipo_trabajador, 'Sin clasificar') "
+            "FROM empleados WHERE activo = 1 ORDER BY nombre"
+        ).fetchall()
+        conexion.close()
+        if not trabajadores_clasificar:
+            st.info("No hay trabajadores registrados para clasificar.")
+        else:
+            trabajadores_dict = {
+                f"{t[1]} - {t[2]} (actual: {t[3]})": t for t in trabajadores_clasificar
+            }
+            with st.form("form_clasificar_trabajador"):
+                trabajador_key = st.selectbox("Selecciona al trabajador", list(trabajadores_dict.keys()))
+                tipo_nuevo = st.selectbox("Tipo de trabajador", ["Sindicalizado", "Base"])
+                guardar_tipo = st.form_submit_button("💾 Guardar clasificación", use_container_width=True)
+            if guardar_tipo:
+                trabajador = trabajadores_dict[trabajador_key]
+                conexion = conectar()
+                try:
+                    conexion.execute(
+                        "UPDATE empleados SET tipo_trabajador = ? WHERE id = ?",
+                        (tipo_nuevo, trabajador[0])
+                    )
+                    conexion.commit()
+                    registrar_bitacora("Empleados", "Clasificación laboral actualizada", f"Matrícula: {trabajador[1]} | Tipo: {tipo_nuevo}")
+                    st.success(f"Se actualizó {trabajador[1]} como {tipo_nuevo}.")
+                    st.rerun()
+                except Exception as exc:
+                    conexion.rollback()
+                    st.error(f"No se pudo actualizar la clasificación: {exc}")
+                finally:
+                    conexion.close()
+
 
 # ============================================================
 # SOLICITUDES ENTRE RELACIONES LABORALES Y ALMACÉN
@@ -819,7 +877,7 @@ elif opcion == "📨 Solicitudes a Almacén":
     st.title("📨 Solicitudes de uniformes")
     st.caption("Las áreas solicitan; Relaciones Laborales autoriza; Almacén prepara y entrega con firma. El inventario se descuenta únicamente al confirmar la entrega.")
     conexion = conectar()
-    empleados_sol = conexion.execute("SELECT id, numero_empleado, nombre, puesto, area, COALESCE(disciplina, '') FROM empleados WHERE activo=1 ORDER BY nombre").fetchall()
+    empleados_sol = conexion.execute("SELECT id, numero_empleado, nombre, puesto, area, COALESCE(disciplina, ''), COALESCE(tipo_trabajador, 'Sin clasificar') FROM empleados WHERE activo=1 ORDER BY nombre").fetchall()
     prendas_sol = conexion.execute("SELECT id, nombre, talla, existencia FROM prendas WHERE activo=1 ORDER BY nombre, talla").fetchall()
     conexion.close()
 
@@ -855,13 +913,28 @@ elif opcion == "📨 Solicitudes a Almacén":
                 empleados_elegibles = [e for e in empleados_sol if e[4].strip().casefold() == (st.session_state.area or "").strip().casefold()]
             else:
                 empleados_elegibles = empleados_sol
-            emps = {f"{e[1]} - {e[2]}": e for e in empleados_elegibles}
+            emps = {f"{e[1]} - {e[2]} ({e[6]})": e for e in empleados_elegibles}
             if not emps:
                 st.info("No hay trabajadores registrados en tu área. Solicita a Relaciones Laborales actualizar el área de los empleados.")
             prendas_sel = {f"{p[1]} | Talla {p[2]} | Existencia {p[3]}": p for p in prendas_sol}
             if emps:
+              emp_key = st.selectbox("Trabajador (matrícula)", list(emps), key="solicitud_empleado_tipo")
+              empleado_solicitud = emps[emp_key]
+              st.caption(f"Tipo de trabajador: {empleado_solicitud[6]} · Puesto: {empleado_solicitud[3]}")
+              con_reglas = conectar()
+              reglas_aplicables = con_reglas.execute("""SELECT p.nombre, p.talla, d.cantidad, d.frecuencia, COALESCE(d.tipo_trabajador, 'Todos'), COALESCE(d.observaciones, '')
+                  FROM dotaciones d JOIN prendas p ON p.id=d.prenda_id
+                  WHERE lower(trim(d.puesto))=lower(trim(?))
+                    AND (COALESCE(d.tipo_trabajador, 'Todos')='Todos' OR COALESCE(d.tipo_trabajador, 'Todos')=?)
+                  ORDER BY p.nombre, p.talla""", (empleado_solicitud[3], empleado_solicitud[6])).fetchall()
+              con_reglas.close()
+              with st.expander("📋 Consultar matriz de dotación aplicable", expanded=True):
+                  if reglas_aplicables:
+                      import pandas as pd
+                      st.dataframe(pd.DataFrame(reglas_aplicables, columns=["Prenda", "Talla", "Cantidad autorizada", "Frecuencia", "Tipo de trabajador", "Observaciones"]), use_container_width=True, hide_index=True)
+                  else:
+                      st.info("No hay reglas registradas para este puesto y tipo de trabajador. Relaciones Laborales debe revisar la matriz antes de autorizar la solicitud.")
               with st.form("solicitud_rl"):
-                  emp_key = st.selectbox("Trabajador (matrícula)", list(emps))
                   pre_key = st.selectbox("Prenda solicitada", list(prendas_sel))
                   cant = st.number_input("Cantidad solicitada", min_value=1, step=1, value=1)
                   motivo = st.selectbox("Motivo", ["Dotación inicial", "Dotación programada", "Cambio de talla", "Reposición", "Otro"])
@@ -902,6 +975,7 @@ elif opcion == "📨 Solicitudes a Almacén":
          cantidad_sol, motivo_sol, obs_sol, fecha_sol, autor_sol, estado_sol, respuesta_sol, stock_sol,
          emp_id, pre_id, entregado_sol, fecha_ent_sol, entrega_id_sol, area_solicitante) = x
         with st.expander(f"#{sid} · {estado_sol} · {matricula} - {nombre_emp} · {nombre_pre} ({talla_pre})"):
+            st.write(f"**Tipo de trabajador:** {next((e[6] for e in empleados_sol if e[1] == matricula), 'Sin clasificar')}")
             st.write(f"**Solicitado:** {cantidad_sol} | **Motivo:** {motivo_sol} | **Fecha:** {fecha_sol} | **Por:** {autor_sol}")
             if obs_sol: st.write(f"**Observaciones:** {obs_sol}")
             if respuesta_sol: st.write(f"**Respuesta de Almacén:** {respuesta_sol}")
@@ -1248,7 +1322,7 @@ elif opcion == "🏭 Almacén":
             st.code("python -m pip install streamlit-drawable-canvas pillow reportlab", language="powershell")
         else:
             conexion = conectar(); cursor = conexion.cursor()
-            cursor.execute("SELECT id, numero_empleado, nombre, puesto, area, disciplina FROM empleados WHERE activo = 1 ORDER BY nombre")
+            cursor.execute("SELECT id, numero_empleado, nombre, puesto, area, disciplina, COALESCE(tipo_trabajador, 'Sin clasificar') FROM empleados WHERE activo = 1 ORDER BY nombre")
             empleados = cursor.fetchall()
             cursor.execute("SELECT id, nombre, talla, existencia FROM prendas WHERE activo = 1 ORDER BY nombre, talla")
             prendas = cursor.fetchall(); conexion.close()
@@ -1257,7 +1331,7 @@ elif opcion == "🏭 Almacén":
             elif not prendas:
                 st.warning("⚠️ Primero registra prendas.")
             else:
-                empleados_d = {f"{e[1]} - {e[2]}": e for e in empleados}
+                empleados_d = {f"{e[1]} - {e[2]} ({e[6]})": e for e in empleados}
                 prendas_d = {f"{p[1]} - Talla {p[2]} - Disponible: {p[3]}": p for p in prendas}
                 empleado_txt = st.selectbox("Trabajador (Matrícula) *", list(empleados_d.keys()), key="alm_emp")
                 empleado = empleados_d[empleado_txt]
@@ -1323,7 +1397,7 @@ elif opcion == "📦 Entregas":
 
     conexion = conectar()
     cursor = conexion.cursor()
-    cursor.execute("SELECT id, numero_empleado, nombre, puesto, area FROM empleados WHERE activo = 1 ORDER BY nombre")
+    cursor.execute("SELECT id, numero_empleado, nombre, puesto, area, COALESCE(tipo_trabajador, 'Sin clasificar') FROM empleados WHERE activo = 1 ORDER BY nombre")
     empleados = cursor.fetchall()
     cursor.execute("SELECT id, nombre, talla, existencia FROM prendas WHERE activo = 1 ORDER BY nombre, talla")
     prendas = cursor.fetchall()
@@ -1334,7 +1408,7 @@ elif opcion == "📦 Entregas":
     elif not prendas:
         st.warning("⚠️ Primero registra prendas en inventario.")
     else:
-        empleados_dict = {f"{e[1]} - {e[2]}": e for e in empleados}
+        empleados_dict = {f"{e[1]} - {e[2]} ({e[5]})": e for e in empleados}
         prendas_dict = {f"{p[1]} - Talla {p[2]} - Disponible: {p[3]}": p for p in prendas}
 
         izquierda, derecha = st.columns([1.05, 0.95])
@@ -1960,6 +2034,12 @@ elif opcion == "📋 Matriz de Dotación":
                 "Puesto *"
             )
 
+            tipo_dotacion = st.selectbox(
+                "Tipo de trabajador al que aplica *",
+                ["Todos", "Sindicalizado", "Base"],
+                help="Usa 'Todos' solo si la misma regla aplica a ambos grupos."
+            )
+
             prendas_dict = {
                 f"{p[1]} - Talla {p[2]}": p[0]
                 for p in prendas
@@ -2013,19 +2093,20 @@ elif opcion == "📋 Matriz de Dotación":
                     cursor.execute("""
                         INSERT INTO dotaciones
                         (puesto, prenda_id, cantidad,
-                         frecuencia, observaciones)
-                        VALUES (?, ?, ?, ?, ?)
+                         frecuencia, observaciones, tipo_trabajador)
+                        VALUES (?, ?, ?, ?, ?, ?)
                     """, (
                         puesto.strip(),
                         prendas_dict[prenda_texto],
                         cantidad,
                         frecuencia,
-                        observaciones.strip()
+                        observaciones.strip(),
+                        tipo_dotacion
                     ))
 
                     conexion.commit()
                     conexion.close()
-                    registrar_bitacora("Matriz de Dotación", "Alta de regla", f"Puesto: {puesto.strip()} | Prenda ID: {prendas_dict[prenda_texto]} | Cantidad: {cantidad} | Frecuencia: {frecuencia}")
+                    registrar_bitacora("Matriz de Dotación", "Alta de regla", f"Puesto: {puesto.strip()} | Tipo: {tipo_dotacion} | Prenda ID: {prendas_dict[prenda_texto]} | Cantidad: {cantidad} | Frecuencia: {frecuencia}")
 
                     st.success(
                         "✅ Regla de dotación guardada."
@@ -2045,7 +2126,8 @@ elif opcion == "📋 Matriz de Dotación":
                 p.talla,
                 d.cantidad,
                 d.frecuencia,
-                d.observaciones
+                d.observaciones,
+                COALESCE(d.tipo_trabajador, 'Todos')
             FROM dotaciones d
             INNER JOIN prendas p
                 ON d.prenda_id = p.id
@@ -2067,7 +2149,8 @@ elif opcion == "📋 Matriz de Dotación":
                     "Talla",
                     "Cantidad",
                     "Frecuencia",
-                    "Observaciones"
+                    "Observaciones",
+                    "Tipo de trabajador"
                 ]
             )
 
