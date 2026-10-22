@@ -186,6 +186,30 @@ def inicializar_bd():
         )
     """)
 
+    # Solicitudes coordinadas: tabla nueva; no altera registros anteriores.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS solicitudes_almacen (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            empleado_id INTEGER NOT NULL,
+            prenda_id INTEGER NOT NULL,
+            cantidad INTEGER NOT NULL CHECK(cantidad > 0),
+            motivo TEXT NOT NULL,
+            observaciones TEXT,
+            fecha_solicitud TEXT NOT NULL,
+            solicitado_por TEXT NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'Pendiente',
+            revisado_por TEXT,
+            fecha_revision TEXT,
+            respuesta TEXT,
+            entregado_por TEXT,
+            fecha_entrega TEXT,
+            entrega_id INTEGER UNIQUE,
+            FOREIGN KEY(empleado_id) REFERENCES empleados(id),
+            FOREIGN KEY(prenda_id) REFERENCES prendas(id),
+            FOREIGN KEY(entrega_id) REFERENCES entregas(id)
+        )
+    """)
+
     # Usuarios iniciales para demostración
     usuarios_iniciales = [
         ("admin", "admin123", "Relaciones Laborales"),
@@ -552,6 +576,9 @@ if rol in ["Relaciones Laborales"]:
     opciones.append("👥 Empleados")
 
 if rol in ["Relaciones Laborales", "Almacén"]:
+    opciones.append("📨 Solicitudes a Almacén")
+
+if rol in ["Relaciones Laborales", "Almacén"]:
     opciones.append("👕 Inventario")
 
 if rol in ["Relaciones Laborales", "Almacén"]:
@@ -765,6 +792,154 @@ if opcion == "👥 Empleados":
         else:
 
             st.info("No hay empleados registrados.")
+
+
+# ============================================================
+# SOLICITUDES ENTRE RELACIONES LABORALES Y ALMACÉN
+# ============================================================
+elif opcion == "📨 Solicitudes a Almacén":
+    st.title("📨 Solicitudes de uniformes")
+    st.caption("Relaciones Laborales solicita; Almacén revisa y entrega con firma. El inventario se descuenta únicamente al confirmar la entrega.")
+    conexion = conectar()
+    empleados_sol = conexion.execute("SELECT id, numero_empleado, nombre, puesto, area, COALESCE(disciplina, '') FROM empleados WHERE activo=1 ORDER BY nombre").fetchall()
+    prendas_sol = conexion.execute("SELECT id, nombre, talla, existencia FROM prendas WHERE activo=1 ORDER BY nombre, talla").fetchall()
+    conexion.close()
+
+    if rol == "Relaciones Laborales":
+        st.subheader("Nueva solicitud")
+        if not empleados_sol or not prendas_sol:
+            st.warning("Registra primero trabajadores y prendas en sus respectivos módulos.")
+        else:
+            emps = {f"{e[1]} - {e[2]}": e for e in empleados_sol}
+            prendas_sel = {f"{p[1]} | Talla {p[2]} | Existencia {p[3]}": p for p in prendas_sol}
+            with st.form("solicitud_rl"):
+                emp_key = st.selectbox("Trabajador (matrícula)", list(emps))
+                pre_key = st.selectbox("Prenda solicitada", list(prendas_sel))
+                cant = st.number_input("Cantidad solicitada", min_value=1, step=1, value=1)
+                motivo = st.selectbox("Motivo", ["Dotación inicial", "Dotación programada", "Cambio de talla", "Reposición", "Otro"])
+                obs = st.text_area("Observaciones")
+                enviar = st.form_submit_button("📨 Enviar solicitud", use_container_width=True)
+            if enviar:
+                con = conectar()
+                try:
+                    con.execute("""INSERT INTO solicitudes_almacen
+                        (empleado_id,prenda_id,cantidad,motivo,observaciones,fecha_solicitud,solicitado_por)
+                        VALUES (?,?,?,?,?,?,?)""", (emps[emp_key][0], prendas_sel[pre_key][0], int(cant), motivo, obs.strip(), ahora(), st.session_state.usuario))
+                    folio = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    con.commit()
+                    registrar_bitacora("Solicitudes a Almacén", "Nueva solicitud", f"Solicitud #{folio}")
+                    st.success(f"Solicitud #{folio} enviada a Almacén. Estado: Pendiente.")
+                except Exception as exc:
+                    con.rollback(); st.error(f"No se pudo registrar: {exc}")
+                finally:
+                    con.close()
+
+    con = conectar()
+    solicitudes = con.execute("""SELECT s.id, e.numero_empleado, e.nombre, e.puesto, e.area, COALESCE(e.disciplina,''),
+        p.nombre, p.talla, s.cantidad, s.motivo, COALESCE(s.observaciones,''), s.fecha_solicitud,
+        s.solicitado_por, s.estado, COALESCE(s.respuesta,''), p.existencia, s.empleado_id, s.prenda_id,
+        COALESCE(s.entregado_por,''), COALESCE(s.fecha_entrega,''), s.entrega_id
+        FROM solicitudes_almacen s JOIN empleados e ON e.id=s.empleado_id JOIN prendas p ON p.id=s.prenda_id
+        ORDER BY s.id DESC""").fetchall()
+    con.close()
+    st.divider()
+    st.subheader("Seguimiento de solicitudes")
+    filtro_sol = st.selectbox("Estado", ["Todas", "Pendiente", "Preparada", "Entregada", "Rechazada"], key="filtro_sol")
+    visibles = [x for x in solicitudes if filtro_sol == "Todas" or x[13] == filtro_sol]
+    if not visibles:
+        st.info("No hay solicitudes para este filtro.")
+    for x in visibles:
+        (sid, matricula, nombre_emp, puesto_emp, area_emp, disciplina_emp, nombre_pre, talla_pre,
+         cantidad_sol, motivo_sol, obs_sol, fecha_sol, autor_sol, estado_sol, respuesta_sol, stock_sol,
+         emp_id, pre_id, entregado_sol, fecha_ent_sol, entrega_id_sol) = x
+        with st.expander(f"#{sid} · {estado_sol} · {matricula} - {nombre_emp} · {nombre_pre} ({talla_pre})"):
+            st.write(f"**Solicitado:** {cantidad_sol} | **Motivo:** {motivo_sol} | **Fecha:** {fecha_sol} | **Por:** {autor_sol}")
+            if obs_sol: st.write(f"**Observaciones:** {obs_sol}")
+            if respuesta_sol: st.write(f"**Respuesta de Almacén:** {respuesta_sol}")
+            if fecha_ent_sol: st.write(f"**Entregado:** {fecha_ent_sol} | **Responsable:** {entregado_sol} | **Entrega #{entrega_id_sol}")
+            if rol == "Almacén" and estado_sol == "Pendiente":
+                st.write(f"Existencia actual: {stock_sol}")
+                with st.form(f"revision_sol_{sid}"):
+                    respuesta = st.text_area("Comentario de revisión", key=f"resp_{sid}")
+                    c1,c2 = st.columns(2)
+                    preparar = c1.form_submit_button("✅ Marcar preparada", use_container_width=True)
+                    rechazar = c2.form_submit_button("❌ Rechazar", use_container_width=True)
+                if preparar or rechazar:
+                    if preparar and stock_sol < cantidad_sol:
+                        st.error("Existencia insuficiente. Registra una entrada antes de preparar la solicitud.")
+                    elif rechazar and not respuesta.strip():
+                        st.error("Indica el motivo del rechazo.")
+                    else:
+                        nuevo_estado = "Preparada" if preparar else "Rechazada"
+                        con = conectar()
+                        try:
+                            cur = con.execute("""UPDATE solicitudes_almacen SET estado=?, revisado_por=?, fecha_revision=?, respuesta=?
+                                WHERE id=? AND estado='Pendiente'""", (nuevo_estado, st.session_state.usuario, ahora(), respuesta.strip(), sid))
+                            con.commit()
+                            if cur.rowcount:
+                                registrar_bitacora("Solicitudes a Almacén", nuevo_estado, f"Solicitud #{sid}")
+                                st.success(f"Solicitud #{sid}: {nuevo_estado}."); st.rerun()
+                            else: st.warning("Esta solicitud ya fue revisada. Actualiza la página.")
+                        except Exception as exc:
+                            con.rollback(); st.error(str(exc))
+                        finally: con.close()
+            if rol == "Almacén" and estado_sol == "Preparada":
+                st.write("El trabajador debe firmar para confirmar la entrega.")
+                if st_canvas is None:
+                    st.warning("Instala streamlit-drawable-canvas y pillow para habilitar la firma digital.")
+                else:
+                    canvas_sol = st_canvas(fill_color="rgba(255,255,255,0)", stroke_width=3,
+                        stroke_color="#111111", background_color="#FFFFFF", height=180, width=600,
+                        drawing_mode="freedraw", display_toolbar=True, key=f"firma_solicitud_{sid}")
+                    if st.button("📦 Confirmar entrega y descontar inventario", key=f"entregar_sol_{sid}"):
+                        firma_sol = firma_a_base64(canvas_sol.image_data if canvas_sol else None)
+                        # Comprobar trazos reales; un fondo blanco no equivale a una firma.
+                        import numpy as np
+                        pixels = canvas_sol.image_data if canvas_sol else None
+                        tiene_trazos = pixels is not None and np.any(np.asarray(pixels)[:, :, :3] < 180)
+                        if not firma_sol or not tiene_trazos:
+                            st.error("El trabajador debe firmar antes de confirmar.")
+                        else:
+                            con = conectar()
+                            try:
+                                con.execute("BEGIN IMMEDIATE")
+                                actual = con.execute("SELECT estado, empleado_id, prenda_id, cantidad FROM solicitudes_almacen WHERE id=?", (sid,)).fetchone()
+                                if not actual or actual[0] != "Preparada":
+                                    raise ValueError("La solicitud ya fue procesada o cambió de estado.")
+                                cur = con.execute("UPDATE prendas SET existencia=existencia-? WHERE id=? AND activo=1 AND existencia>=?", (actual[3], actual[2], actual[3]))
+                                if cur.rowcount != 1:
+                                    raise ValueError("Inventario insuficiente. No se registró la entrega.")
+                                fecha_hora = ahora()
+                                cur = con.execute("""INSERT INTO entregas
+                                    (empleado_id,prenda_id,cantidad,fecha,responsable,acuse,observaciones,firma,firma_fecha)
+                                    VALUES (?,?,?,?,?,1,?,?,?)""", (actual[1],actual[2],actual[3],fecha_hora,st.session_state.usuario,
+                                    f"Solicitud de Almacén #{sid}. {obs_sol}",firma_sol,fecha_hora))
+                                folio_ent = cur.lastrowid
+                                con.execute("""INSERT INTO movimientos (prenda_id,tipo,cantidad,fecha,usuario,descripcion)
+                                    VALUES (?, 'SALIDA', ?, ?, ?, ?)""", (actual[2],actual[3],fecha_hora,st.session_state.usuario,f"Entrega por solicitud #{sid}; entrega #{folio_ent}"))
+                                con.execute("""UPDATE solicitudes_almacen SET estado='Entregada', entregado_por=?, fecha_entrega=?, entrega_id=?
+                                    WHERE id=? AND estado='Preparada'""", (st.session_state.usuario,fecha_hora,folio_ent,sid))
+                                con.commit()
+                                st.session_state.ultimo_acuse = {"folio":folio_ent,"matricula":matricula,"nombre":nombre_emp,
+                                    "puesto":puesto_emp,"area":area_emp,"disciplina":disciplina_emp,"prenda":nombre_pre,"talla":talla_pre,
+                                    "cantidad":actual[3],"fecha":fecha_hora,"responsable":st.session_state.usuario,
+                                    "observaciones":f"Solicitud #{sid}. {obs_sol}","firma":firma_sol}
+                                registrar_bitacora("Solicitudes a Almacén", "Entrega confirmada", f"Solicitud #{sid} | Entrega #{folio_ent}")
+                                st.success(f"Entrega #{folio_ent} registrada correctamente."); st.rerun()
+                            except Exception as exc:
+                                con.rollback(); st.error(f"No se realizó ningún descuento: {exc}")
+                            finally: con.close()
+            if estado_sol == "Entregada" and entrega_id_sol:
+                if st.button("🧾 Ver acuse digital", key=f"acuse_sol_{sid}"):
+                    con = conectar()
+                    entrega = con.execute("SELECT fecha,responsable,observaciones,firma FROM entregas WHERE id=?", (entrega_id_sol,)).fetchone()
+                    con.close()
+                    if entrega:
+                        st.session_state[f"acuse_ver_{sid}"] = {"folio":entrega_id_sol,"matricula":matricula,"nombre":nombre_emp,
+                            "puesto":puesto_emp,"area":area_emp,"disciplina":disciplina_emp,"prenda":nombre_pre,"talla":talla_pre,
+                            "cantidad":cantidad_sol,"fecha":entrega[0],"responsable":entrega[1],"observaciones":entrega[2],"firma":entrega[3]}
+                if st.session_state.get(f"acuse_ver_{sid}"):
+                    mostrar_acuse(st.session_state[f"acuse_ver_{sid}"])
 
 
 # ============================================================
