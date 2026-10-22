@@ -210,6 +210,18 @@ def inicializar_bd():
         )
     """)
 
+    # Migraciones aditivas: las cuentas y solicitudes anteriores se conservan.
+    columnas_usuario = [r[1] for r in cursor.execute("PRAGMA table_info(usuarios)").fetchall()]
+    if "area" not in columnas_usuario:
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN area TEXT DEFAULT ''")
+    columnas_sol = [r[1] for r in cursor.execute("PRAGMA table_info(solicitudes_almacen)").fetchall()]
+    if "area_solicitante" not in columnas_sol:
+        cursor.execute("ALTER TABLE solicitudes_almacen ADD COLUMN area_solicitante TEXT DEFAULT ''")
+    if "autorizado_por" not in columnas_sol:
+        cursor.execute("ALTER TABLE solicitudes_almacen ADD COLUMN autorizado_por TEXT")
+    if "fecha_autorizacion" not in columnas_sol:
+        cursor.execute("ALTER TABLE solicitudes_almacen ADD COLUMN fecha_autorizacion TEXT")
+
     # Usuarios iniciales para demostración
     usuarios_iniciales = [
         ("admin", "admin123", "Relaciones Laborales"),
@@ -453,6 +465,7 @@ def cerrar_sesion():
     st.session_state.logged_in = False
     st.session_state.usuario = None
     st.session_state.rol = None
+    st.session_state.area = None
     st.rerun()
 
 
@@ -475,6 +488,9 @@ if "usuario" not in st.session_state:
 
 if "rol" not in st.session_state:
     st.session_state.rol = None
+
+if "area" not in st.session_state:
+    st.session_state.area = None
 
 if "ultimo_acuse" not in st.session_state:
     st.session_state.ultimo_acuse = None
@@ -515,7 +531,7 @@ if not st.session_state.logged_in:
             cursor = conexion.cursor()
 
             cursor.execute("""
-                SELECT usuario, rol
+                SELECT usuario, rol, COALESCE(area, '')
                 FROM usuarios
                 WHERE usuario = ?
                 AND password = ?
@@ -533,6 +549,7 @@ if not st.session_state.logged_in:
                 st.session_state.logged_in = True
                 st.session_state.usuario = resultado[0]
                 st.session_state.rol = resultado[1]
+                st.session_state.area = resultado[2]
                 registrar_bitacora("Acceso", "Inicio de sesión", "Inicio de sesión correcto")
 
                 st.rerun()
@@ -575,7 +592,7 @@ opciones = []
 if rol in ["Relaciones Laborales"]:
     opciones.append("👥 Empleados")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Relaciones Laborales", "Almacén", "Solicitante de área"]:
     opciones.append("📨 Solicitudes a Almacén")
 
 if rol in ["Relaciones Laborales", "Almacén"]:
@@ -800,64 +817,118 @@ if opcion == "👥 Empleados":
 # ============================================================
 elif opcion == "📨 Solicitudes a Almacén":
     st.title("📨 Solicitudes de uniformes")
-    st.caption("Relaciones Laborales solicita; Almacén revisa y entrega con firma. El inventario se descuenta únicamente al confirmar la entrega.")
+    st.caption("Las áreas solicitan; Relaciones Laborales autoriza; Almacén prepara y entrega con firma. El inventario se descuenta únicamente al confirmar la entrega.")
     conexion = conectar()
     empleados_sol = conexion.execute("SELECT id, numero_empleado, nombre, puesto, area, COALESCE(disciplina, '') FROM empleados WHERE activo=1 ORDER BY nombre").fetchall()
     prendas_sol = conexion.execute("SELECT id, nombre, talla, existencia FROM prendas WHERE activo=1 ORDER BY nombre, talla").fetchall()
     conexion.close()
 
     if rol == "Relaciones Laborales":
+        with st.expander("👤 Crear acceso para otra área"):
+            with st.form("crear_usuario_area"):
+                nuevo_usuario = st.text_input("Usuario de área *").strip()
+                nueva_clave = st.text_input("Contraseña inicial *", type="password")
+                nueva_area = st.text_input("Nombre del área *").strip()
+                crear_area = st.form_submit_button("Crear cuenta de solicitante")
+            if crear_area:
+                if not nuevo_usuario or len(nueva_clave) < 8 or not nueva_area:
+                    st.error("Completa usuario y área; la contraseña debe tener al menos 8 caracteres.")
+                else:
+                    con = conectar()
+                    try:
+                        con.execute("INSERT INTO usuarios (usuario,password,rol,area) VALUES (?,?,?,?)",
+                            (nuevo_usuario,hash_password(nueva_clave),"Solicitante de área",nueva_area))
+                        con.commit()
+                        registrar_bitacora("Usuarios", "Alta de solicitante", f"Área: {nueva_area} | Usuario: {nuevo_usuario}")
+                        st.success("Cuenta de área creada. Comparte las credenciales por un medio privado.")
+                    except sqlite3.IntegrityError:
+                        st.error("Ese nombre de usuario ya existe.")
+                    finally:
+                        con.close()
+
+    if rol in ("Relaciones Laborales", "Solicitante de área"):
         st.subheader("Nueva solicitud")
         if not empleados_sol or not prendas_sol:
             st.warning("Registra primero trabajadores y prendas en sus respectivos módulos.")
         else:
-            emps = {f"{e[1]} - {e[2]}": e for e in empleados_sol}
+            if rol == "Solicitante de área":
+                empleados_elegibles = [e for e in empleados_sol if e[4].strip().casefold() == (st.session_state.area or "").strip().casefold()]
+            else:
+                empleados_elegibles = empleados_sol
+            emps = {f"{e[1]} - {e[2]}": e for e in empleados_elegibles}
+            if not emps:
+                st.info("No hay trabajadores registrados en tu área. Solicita a Relaciones Laborales actualizar el área de los empleados.")
             prendas_sel = {f"{p[1]} | Talla {p[2]} | Existencia {p[3]}": p for p in prendas_sol}
-            with st.form("solicitud_rl"):
-                emp_key = st.selectbox("Trabajador (matrícula)", list(emps))
-                pre_key = st.selectbox("Prenda solicitada", list(prendas_sel))
-                cant = st.number_input("Cantidad solicitada", min_value=1, step=1, value=1)
-                motivo = st.selectbox("Motivo", ["Dotación inicial", "Dotación programada", "Cambio de talla", "Reposición", "Otro"])
-                obs = st.text_area("Observaciones")
-                enviar = st.form_submit_button("📨 Enviar solicitud", use_container_width=True)
-            if enviar:
-                con = conectar()
-                try:
-                    con.execute("""INSERT INTO solicitudes_almacen
-                        (empleado_id,prenda_id,cantidad,motivo,observaciones,fecha_solicitud,solicitado_por)
-                        VALUES (?,?,?,?,?,?,?)""", (emps[emp_key][0], prendas_sel[pre_key][0], int(cant), motivo, obs.strip(), ahora(), st.session_state.usuario))
-                    folio = con.execute("SELECT last_insert_rowid()").fetchone()[0]
-                    con.commit()
-                    registrar_bitacora("Solicitudes a Almacén", "Nueva solicitud", f"Solicitud #{folio}")
-                    st.success(f"Solicitud #{folio} enviada a Almacén. Estado: Pendiente.")
-                except Exception as exc:
-                    con.rollback(); st.error(f"No se pudo registrar: {exc}")
-                finally:
-                    con.close()
-
+            if emps:
+              with st.form("solicitud_rl"):
+                  emp_key = st.selectbox("Trabajador (matrícula)", list(emps))
+                  pre_key = st.selectbox("Prenda solicitada", list(prendas_sel))
+                  cant = st.number_input("Cantidad solicitada", min_value=1, step=1, value=1)
+                  motivo = st.selectbox("Motivo", ["Dotación inicial", "Dotación programada", "Cambio de talla", "Reposición", "Otro"])
+                  obs = st.text_area("Observaciones")
+                  enviar = st.form_submit_button("📨 Enviar solicitud", use_container_width=True)
+              if enviar:
+                  con = conectar()
+                  try:
+                      con.execute("""INSERT INTO solicitudes_almacen
+                          (empleado_id,prenda_id,cantidad,motivo,observaciones,fecha_solicitud,solicitado_por,area_solicitante,estado)
+                          VALUES (?,?,?,?,?,?,?,?,?)""", (emps[emp_key][0], prendas_sel[pre_key][0], int(cant), motivo, obs.strip(), ahora(), st.session_state.usuario, st.session_state.area if rol == "Solicitante de área" else emps[emp_key][4], "Por autorizar" if rol == "Solicitante de área" else "Pendiente"))
+                      folio = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+                      con.commit()
+                      registrar_bitacora("Solicitudes a Almacén", "Nueva solicitud", f"Solicitud #{folio}")
+                      st.success(f"Solicitud #{folio} registrada. Estado: {'Por autorizar' if rol == 'Solicitante de área' else 'Pendiente'}.")
+                  except Exception as exc:
+                      con.rollback(); st.error(f"No se pudo registrar: {exc}")
+                  finally:
+                      con.close()
     con = conectar()
     solicitudes = con.execute("""SELECT s.id, e.numero_empleado, e.nombre, e.puesto, e.area, COALESCE(e.disciplina,''),
         p.nombre, p.talla, s.cantidad, s.motivo, COALESCE(s.observaciones,''), s.fecha_solicitud,
         s.solicitado_por, s.estado, COALESCE(s.respuesta,''), p.existencia, s.empleado_id, s.prenda_id,
-        COALESCE(s.entregado_por,''), COALESCE(s.fecha_entrega,''), s.entrega_id
+        COALESCE(s.entregado_por,''), COALESCE(s.fecha_entrega,''), s.entrega_id, COALESCE(s.area_solicitante,'')
         FROM solicitudes_almacen s JOIN empleados e ON e.id=s.empleado_id JOIN prendas p ON p.id=s.prenda_id
         ORDER BY s.id DESC""").fetchall()
     con.close()
+    if rol == "Solicitante de área":
+        solicitudes = [x for x in solicitudes if x[12] == st.session_state.usuario and x[21].strip().casefold() == (st.session_state.area or "").strip().casefold()]
     st.divider()
     st.subheader("Seguimiento de solicitudes")
-    filtro_sol = st.selectbox("Estado", ["Todas", "Pendiente", "Preparada", "Entregada", "Rechazada"], key="filtro_sol")
+    filtro_sol = st.selectbox("Estado", ["Todas", "Por autorizar", "Pendiente", "Preparada", "Entregada", "Rechazada"], key="filtro_sol")
     visibles = [x for x in solicitudes if filtro_sol == "Todas" or x[13] == filtro_sol]
     if not visibles:
         st.info("No hay solicitudes para este filtro.")
     for x in visibles:
         (sid, matricula, nombre_emp, puesto_emp, area_emp, disciplina_emp, nombre_pre, talla_pre,
          cantidad_sol, motivo_sol, obs_sol, fecha_sol, autor_sol, estado_sol, respuesta_sol, stock_sol,
-         emp_id, pre_id, entregado_sol, fecha_ent_sol, entrega_id_sol) = x
+         emp_id, pre_id, entregado_sol, fecha_ent_sol, entrega_id_sol, area_solicitante) = x
         with st.expander(f"#{sid} · {estado_sol} · {matricula} - {nombre_emp} · {nombre_pre} ({talla_pre})"):
             st.write(f"**Solicitado:** {cantidad_sol} | **Motivo:** {motivo_sol} | **Fecha:** {fecha_sol} | **Por:** {autor_sol}")
             if obs_sol: st.write(f"**Observaciones:** {obs_sol}")
             if respuesta_sol: st.write(f"**Respuesta de Almacén:** {respuesta_sol}")
             if fecha_ent_sol: st.write(f"**Entregado:** {fecha_ent_sol} | **Responsable:** {entregado_sol} | **Entrega #{entrega_id_sol}")
+            if rol == "Relaciones Laborales" and estado_sol == "Por autorizar":
+                with st.form(f"autorizacion_area_{sid}"):
+                    comentario_rl = st.text_area("Comentario de Relaciones Laborales")
+                    ca, cr = st.columns(2)
+                    autorizar_area = ca.form_submit_button("✅ Autorizar y enviar a Almacén")
+                    rechazar_area = cr.form_submit_button("❌ Rechazar solicitud")
+                if autorizar_area or rechazar_area:
+                    if rechazar_area and not comentario_rl.strip():
+                        st.error("Escribe el motivo del rechazo.")
+                    else:
+                        con = conectar()
+                        try:
+                            estado_nuevo = "Pendiente" if autorizar_area else "Rechazada"
+                            cur = con.execute("""UPDATE solicitudes_almacen SET estado=?, autorizado_por=?, fecha_autorizacion=?, respuesta=?
+                                WHERE id=? AND estado='Por autorizar'""", (estado_nuevo,st.session_state.usuario,ahora(),comentario_rl.strip(),sid))
+                            con.commit()
+                            if cur.rowcount:
+                                registrar_bitacora("Solicitudes a Almacén", estado_nuevo, f"Solicitud de área #{sid}")
+                                st.success("Solicitud actualizada."); st.rerun()
+                            else: st.warning("La solicitud ya fue procesada.")
+                        except Exception as exc:
+                            con.rollback(); st.error(str(exc))
+                        finally: con.close()
             if rol == "Almacén" and estado_sol == "Pendiente":
                 st.write(f"Existencia actual: {stock_sol}")
                 with st.form(f"revision_sol_{sid}"):
