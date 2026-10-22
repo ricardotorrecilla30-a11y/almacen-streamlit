@@ -672,14 +672,15 @@ if opcion == "👥 Empleados":
             with col2:
 
                 talla_camisa = st.selectbox(
-                    "Talla de camisa",
-                    ["", "XS", "S", "M", "L", "XL", "XXL"]
+                    "Talla de camisola",
+                    ["", "28", "30", "32", "34", "36", "38", "40",
+                     "42", "44", "46", "48", "50", "52"]
                 )
 
                 talla_pantalon = st.selectbox(
                     "Talla de pantalón",
-                    ["", "28", "30", "32", "34", "36",
-                     "38", "40", "42", "44"]
+                    ["", "28", "30", "32", "34", "36", "38", "40",
+                     "42", "44", "46", "48", "50", "52"]
                 )
 
                 fecha_ingreso = st.date_input(
