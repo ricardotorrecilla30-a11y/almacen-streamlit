@@ -1,7 +1,8 @@
 import streamlit as st
 import sqlite3
 import hashlib
-from datetime import datetime
+from datetime import datetime, date, timedelta
+import calendar
 from io import BytesIO
 import base64
 
@@ -231,6 +232,26 @@ def inicializar_bd():
         cursor.execute("ALTER TABLE solicitudes_almacen ADD COLUMN autorizado_por TEXT")
     if "fecha_autorizacion" not in columnas_sol:
         cursor.execute("ALTER TABLE solicitudes_almacen ADD COLUMN fecha_autorizacion TEXT")
+
+    # Nuevas funciones: migraciones aditivas, sin borrar información anterior.
+    columnas_sol = {r[1] for r in cursor.execute("PRAGMA table_info(solicitudes_almacen)")}
+    if "cantidad_entregada" not in columnas_sol:
+        cursor.execute("ALTER TABLE solicitudes_almacen ADD COLUMN cantidad_entregada INTEGER NOT NULL DEFAULT 0")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS solicitudes_entregas_parciales (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, solicitud_id INTEGER NOT NULL,
+        entrega_id INTEGER NOT NULL UNIQUE, cantidad INTEGER NOT NULL CHECK(cantidad > 0),
+        fecha TEXT NOT NULL, usuario TEXT NOT NULL,
+        FOREIGN KEY(solicitud_id) REFERENCES solicitudes_almacen(id),
+        FOREIGN KEY(entrega_id) REFERENCES entregas(id))""")
+    # Reconciliar entregas anteriores asociadas a solicitudes; no duplicarlas.
+    cursor.execute("""UPDATE solicitudes_almacen SET cantidad_entregada = cantidad
+        WHERE estado='Entregada' AND entrega_id IS NOT NULL AND cantidad_entregada=0""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS devoluciones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, empleado_id INTEGER NOT NULL,
+        prenda_id INTEGER NOT NULL, cantidad INTEGER NOT NULL CHECK(cantidad > 0),
+        fecha TEXT NOT NULL, motivo TEXT NOT NULL, condicion TEXT NOT NULL,
+        reintegrada INTEGER NOT NULL DEFAULT 0, usuario TEXT NOT NULL, observaciones TEXT,
+        FOREIGN KEY(empleado_id) REFERENCES empleados(id), FOREIGN KEY(prenda_id) REFERENCES prendas(id))""")
 
     # Usuarios iniciales para demostración
     usuarios_iniciales = [
@@ -486,6 +507,90 @@ def cerrar_sesion():
 inicializar_bd()
 
 
+def semaforo(existencia, minimo):
+    if existencia <= 0:
+        return "🔴 Agotado"
+    if existencia <= minimo:
+        return "🟡 Bajo mínimo"
+    return "🟢 Disponible"
+
+
+def sumar_meses(fecha, meses):
+    mes = fecha.month - 1 + meses
+    anio = fecha.year + mes // 12
+    mes = mes % 12 + 1
+    return fecha.replace(year=anio, month=mes, day=min(fecha.day, calendar.monthrange(anio, mes)[1]))
+
+
+def calcular_proximas_dotaciones(con):
+    filas = con.execute("""SELECT e.id,e.numero_empleado,e.nombre,e.puesto,e.tipo_trabajador,
+        d.prenda_id,p.nombre,p.talla,d.cantidad,d.frecuencia,e.fecha_ingreso
+        FROM empleados e JOIN dotaciones d ON LOWER(TRIM(e.puesto))=LOWER(TRIM(d.puesto))
+        JOIN prendas p ON p.id=d.prenda_id
+        WHERE e.activo=1 AND p.activo=1 AND (d.tipo_trabajador='Todos' OR d.tipo_trabajador=e.tipo_trabajador)
+        ORDER BY e.nombre,p.nombre""").fetchall()
+    resultado=[]
+    for emp,mat,nombre,puesto,tipo,pid,prenda,talla,cant,frec,ingreso in filas:
+        ultima=con.execute("SELECT MAX(substr(fecha,1,10)) FROM entregas WHERE empleado_id=? AND prenda_id=?",(emp,pid)).fetchone()[0]
+        referencia=ultima or ingreso
+        try: fecha=date.fromisoformat(str(referencia)[:10])
+        except (ValueError,TypeError): fecha=None
+        if frec == 'Anual': proxima=sumar_meses(fecha,12) if fecha else None
+        elif frec == 'Semestral': proxima=sumar_meses(fecha,6) if fecha else None
+        elif frec == 'Al ingreso': proxima=(fecha if not ultima else None)
+        else: proxima=None
+        resultado.append({'Matrícula':mat,'Empleado':nombre,'Puesto':puesto,'Tipo':tipo,
+            'Prenda':prenda,'Talla':talla,'Cantidad':cant,'Frecuencia':frec,
+            'Última entrega':ultima or 'Sin entrega','Próxima fecha':proxima.isoformat() if proxima else 'Por definir',
+            'Estado':('Vencida / pendiente' if proxima and proxima <= date.today() else 'Programada' if proxima else 'Revisión manual')})
+    return resultado
+
+
+def generar_excel_reportes(hojas):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    libro=Workbook(); libro.remove(libro.active)
+    for titulo,df in hojas.items():
+        ws=libro.create_sheet(titulo[:31]); ws.append(list(df.columns))
+        for fila in df.itertuples(index=False,name=None): ws.append(list(fila))
+        ws.freeze_panes='A2'; ws.auto_filter.ref=ws.dimensions
+        for celda in ws[1]: celda.font=Font(bold=True,color='FFFFFF'); celda.fill=PatternFill('solid',fgColor='26415C')
+        for col in ws.columns:
+            ancho=min(48,max(12,max(len(str(c.value or '')) for c in col)+2))
+            ws.column_dimensions[get_column_letter(col[0].column)].width=ancho
+    salida=BytesIO(); libro.save(salida); return salida.getvalue()
+
+
+def generar_pdf_reporte(hojas, inicio, fin):
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, LongTable, TableStyle, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import landscape, A4
+    from xml.sax.saxutils import escape
+    salida=BytesIO(); doc=SimpleDocTemplate(salida,pagesize=landscape(A4),leftMargin=24,rightMargin=24)
+    estilos=getSampleStyleSheet(); contenido=[Paragraph('TNG - Reporte de control de uniformes',estilos['Title']),
+        Paragraph(f'Periodo: {escape(str(inicio))} a {escape(str(fin))}',estilos['Normal']),Spacer(1,12)]
+    for titulo,df in hojas.items():
+        contenido.append(Paragraph(escape(titulo),estilos['Heading2']))
+        contenido.append(Paragraph(f'Registros: {len(df)}',estilos['Normal']))
+        if not df.empty:
+            # Resumen legible: tablas extensas se consultan completas en Excel.
+            columnas=list(df.columns)[:7]
+            tabla=[[Paragraph(escape(str(c)),estilos['BodyText']) for c in columnas]]
+            for fila in df[columnas].head(35).itertuples(index=False,name=None):
+                tabla.append([Paragraph(escape(str(v if v is not None else ''))[:100],estilos['BodyText']) for v in fila])
+            ancho=(landscape(A4)[0]-48)/len(columnas)
+            t=LongTable(tabla,colWidths=[ancho]*len(columnas),repeatRows=1)
+            t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#26415C')),
+                ('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),0.3,colors.grey),
+                ('VALIGN',(0,0),(-1,-1),'TOP'),('FONTSIZE',(0,0),(-1,-1),7)]))
+            contenido.append(t)
+            if len(df)>35: contenido.append(Paragraph('Vista previa de 35 filas; el Excel contiene el detalle completo.',estilos['Italic']))
+        contenido.append(Spacer(1,16))
+    doc.build(contenido); return salida.getvalue()
+
+
 # ============================================================
 # LOGIN
 # ============================================================
@@ -634,6 +739,9 @@ if rol in ["Relaciones Laborales", "Almacén"]:
 
 if rol in ["Relaciones Laborales", "Almacén"]:
     opciones.append("⚠️ Alertas")
+
+if rol in ["Relaciones Laborales", "Almacén"]:
+    opciones.extend(["🚦 Semáforo", "📅 Próximas dotaciones", "📉 Pronóstico", "↩️ Devoluciones"])
 
 if rol in ["Relaciones Laborales", "Almacén"]:
     opciones.append("📑 Reportes")
@@ -966,7 +1074,7 @@ elif opcion == "📨 Solicitudes a Almacén":
         solicitudes = [x for x in solicitudes if x[12] == st.session_state.usuario and x[21].strip().casefold() == (st.session_state.area or "").strip().casefold()]
     st.divider()
     st.subheader("Seguimiento de solicitudes")
-    filtro_sol = st.selectbox("Estado", ["Todas", "Por autorizar", "Pendiente", "Preparada", "Entregada", "Rechazada"], key="filtro_sol")
+    filtro_sol = st.selectbox("Estado", ["Todas", "Por autorizar", "Pendiente", "Preparada", "Parcial", "Entregada", "Rechazada"], key="filtro_sol")
     visibles = [x for x in solicitudes if filtro_sol == "Todas" or x[13] == filtro_sol]
     if not visibles:
         st.info("No hay solicitudes para este filtro.")
@@ -980,6 +1088,13 @@ elif opcion == "📨 Solicitudes a Almacén":
             if obs_sol: st.write(f"**Observaciones:** {obs_sol}")
             if respuesta_sol: st.write(f"**Respuesta de Almacén:** {respuesta_sol}")
             if fecha_ent_sol: st.write(f"**Entregado:** {fecha_ent_sol} | **Responsable:** {entregado_sol} | **Entrega #{entrega_id_sol}")
+            con_hist=conectar()
+            parcial_hist=con_hist.execute("SELECT cantidad_entregada FROM solicitudes_almacen WHERE id=?",(sid,)).fetchone()[0]
+            historial=con_hist.execute("SELECT entrega_id,cantidad,fecha,usuario FROM solicitudes_entregas_parciales WHERE solicitud_id=? ORDER BY id",(sid,)).fetchall()
+            con_hist.close()
+            st.write(f"**Avance:** {parcial_hist} de {cantidad_sol} unidades | **Pendiente:** {max(0,cantidad_sol-parcial_hist)}")
+            if historial:
+                st.dataframe([{'Acuse / entrega':h[0],'Cantidad':h[1],'Fecha':h[2],'Responsable':h[3]} for h in historial],hide_index=True,use_container_width=True)
             if rol == "Relaciones Laborales" and estado_sol == "Por autorizar":
                 with st.form(f"autorizacion_area_{sid}"):
                     comentario_rl = st.text_area("Comentario de Relaciones Laborales")
@@ -1011,8 +1126,8 @@ elif opcion == "📨 Solicitudes a Almacén":
                     preparar = c1.form_submit_button("✅ Marcar preparada", use_container_width=True)
                     rechazar = c2.form_submit_button("❌ Rechazar", use_container_width=True)
                 if preparar or rechazar:
-                    if preparar and stock_sol < cantidad_sol:
-                        st.error("Existencia insuficiente. Registra una entrada antes de preparar la solicitud.")
+                    if preparar and stock_sol <= 0:
+                        st.error("No hay existencia disponible. Registra una entrada antes de preparar la solicitud.")
                     elif rechazar and not respuesta.strip():
                         st.error("Indica el motivo del rechazo.")
                     else:
@@ -1029,8 +1144,14 @@ elif opcion == "📨 Solicitudes a Almacén":
                         except Exception as exc:
                             con.rollback(); st.error(str(exc))
                         finally: con.close()
-            if rol == "Almacén" and estado_sol == "Preparada":
-                st.write("El trabajador debe firmar para confirmar la entrega.")
+            if rol == "Almacén" and estado_sol in ("Preparada", "Parcial"):
+                con_tmp=conectar()
+                entregada_tmp=con_tmp.execute("SELECT cantidad_entregada FROM solicitudes_almacen WHERE id=?",(sid,)).fetchone()[0]
+                con_tmp.close()
+                restante_tmp=max(0,cantidad_sol-entregada_tmp)
+                st.write(f"Solicitado: {cantidad_sol} | Entregado: {entregada_tmp} | Pendiente: {restante_tmp}")
+                cantidad_parcial=st.number_input("Cantidad a entregar ahora",min_value=1,max_value=max(1,restante_tmp),value=max(1,min(restante_tmp,stock_sol)),key=f"parcial_{sid}")
+                st.write("El trabajador debe firmar cada entrega, incluso si es parcial.")
                 if st_canvas is None:
                     st.warning("Instala streamlit-drawable-canvas y pillow para habilitar la firma digital.")
                 else:
@@ -1050,25 +1171,33 @@ elif opcion == "📨 Solicitudes a Almacén":
                             try:
                                 con.execute("BEGIN IMMEDIATE")
                                 actual = con.execute("SELECT estado, empleado_id, prenda_id, cantidad FROM solicitudes_almacen WHERE id=?", (sid,)).fetchone()
-                                if not actual or actual[0] != "Preparada":
+                                if not actual or actual[0] not in ("Preparada", "Parcial"):
                                     raise ValueError("La solicitud ya fue procesada o cambió de estado.")
-                                cur = con.execute("UPDATE prendas SET existencia=existencia-? WHERE id=? AND activo=1 AND existencia>=?", (actual[3], actual[2], actual[3]))
+                                entregado_previo=con.execute("SELECT cantidad_entregada FROM solicitudes_almacen WHERE id=?",(sid,)).fetchone()[0]
+                                if cantidad_parcial > actual[3]-entregado_previo:
+                                    raise ValueError("La cantidad supera el saldo pendiente.")
+                                cur = con.execute("UPDATE prendas SET existencia=existencia-? WHERE id=? AND activo=1 AND existencia>=?", (cantidad_parcial, actual[2], cantidad_parcial))
                                 if cur.rowcount != 1:
                                     raise ValueError("Inventario insuficiente. No se registró la entrega.")
                                 fecha_hora = ahora()
                                 cur = con.execute("""INSERT INTO entregas
                                     (empleado_id,prenda_id,cantidad,fecha,responsable,acuse,observaciones,firma,firma_fecha)
-                                    VALUES (?,?,?,?,?,1,?,?,?)""", (actual[1],actual[2],actual[3],fecha_hora,st.session_state.usuario,
+                                    VALUES (?,?,?,?,?,1,?,?,?)""", (actual[1],actual[2],cantidad_parcial,fecha_hora,st.session_state.usuario,
                                     f"Solicitud de Almacén #{sid}. {obs_sol}",firma_sol,fecha_hora))
                                 folio_ent = cur.lastrowid
                                 con.execute("""INSERT INTO movimientos (prenda_id,tipo,cantidad,fecha,usuario,descripcion)
-                                    VALUES (?, 'SALIDA', ?, ?, ?, ?)""", (actual[2],actual[3],fecha_hora,st.session_state.usuario,f"Entrega por solicitud #{sid}; entrega #{folio_ent}"))
-                                con.execute("""UPDATE solicitudes_almacen SET estado='Entregada', entregado_por=?, fecha_entrega=?, entrega_id=?
-                                    WHERE id=? AND estado='Preparada'""", (st.session_state.usuario,fecha_hora,folio_ent,sid))
+                                    VALUES (?, 'SALIDA', ?, ?, ?, ?)""", (actual[2],cantidad_parcial,fecha_hora,st.session_state.usuario,f"Entrega por solicitud #{sid}; entrega #{folio_ent}"))
+                                nuevo_total=entregado_previo+cantidad_parcial
+                                nuevo_estado='Entregada' if nuevo_total==actual[3] else 'Parcial'
+                                con.execute("""INSERT INTO solicitudes_entregas_parciales
+                                    (solicitud_id,entrega_id,cantidad,fecha,usuario) VALUES (?,?,?,?,?)""",
+                                    (sid,folio_ent,cantidad_parcial,fecha_hora,st.session_state.usuario))
+                                con.execute("""UPDATE solicitudes_almacen SET estado=?, cantidad_entregada=?, entregado_por=?, fecha_entrega=?, entrega_id=?
+                                    WHERE id=? AND estado IN ('Preparada','Parcial')""", (nuevo_estado,nuevo_total,st.session_state.usuario,fecha_hora,folio_ent,sid))
                                 con.commit()
                                 st.session_state.ultimo_acuse = {"folio":folio_ent,"matricula":matricula,"nombre":nombre_emp,
                                     "puesto":puesto_emp,"area":area_emp,"disciplina":disciplina_emp,"prenda":nombre_pre,"talla":talla_pre,
-                                    "cantidad":actual[3],"fecha":fecha_hora,"responsable":st.session_state.usuario,
+                                    "cantidad":cantidad_parcial,"fecha":fecha_hora,"responsable":st.session_state.usuario,
                                     "observaciones":f"Solicitud #{sid}. {obs_sol}","firma":firma_sol}
                                 registrar_bitacora("Solicitudes a Almacén", "Entrega confirmada", f"Solicitud #{sid} | Entrega #{folio_ent}")
                                 st.success(f"Entrega #{folio_ent} registrada correctamente."); st.rerun()
@@ -1083,7 +1212,7 @@ elif opcion == "📨 Solicitudes a Almacén":
                     if entrega:
                         st.session_state[f"acuse_ver_{sid}"] = {"folio":entrega_id_sol,"matricula":matricula,"nombre":nombre_emp,
                             "puesto":puesto_emp,"area":area_emp,"disciplina":disciplina_emp,"prenda":nombre_pre,"talla":talla_pre,
-                            "cantidad":cantidad_sol,"fecha":entrega[0],"responsable":entrega[1],"observaciones":entrega[2],"firma":entrega[3]}
+                            "cantidad":next((h[1] for h in historial if h[0] == entrega_id_sol), cantidad_sol),"fecha":entrega[0],"responsable":entrega[1],"observaciones":entrega[2],"firma":entrega[3]}
                 if st.session_state.get(f"acuse_ver_{sid}"):
                     mostrar_acuse(st.session_state[f"acuse_ver_{sid}"])
 
@@ -2734,6 +2863,111 @@ elif opcion == "⚠️ Alertas":
 
 
 # ============================================================
+# NUEVAS FUNCIONES DE CONTROL
+# ============================================================
+elif opcion == "🚦 Semáforo":
+    st.title("🚦 Semáforo de inventario")
+    con=conectar()
+    filas=con.execute("SELECT nombre,talla,existencia,minimo FROM prendas WHERE activo=1 ORDER BY nombre,talla").fetchall()
+    con.close()
+    import pandas as pd
+    df=pd.DataFrame([{'Prenda':a,'Talla':b,'Existencia':c,'Mínimo':d,'Estado':semaforo(c,d)} for a,b,c,d in filas])
+    if df.empty: st.info('Registra prendas para consultar el semáforo.')
+    else:
+        cols=st.columns(3)
+        for col,estado in zip(cols,['🔴 Agotado','🟡 Bajo mínimo','🟢 Disponible']): col.metric(estado,int((df['Estado']==estado).sum()))
+        filtro=st.selectbox('Filtrar por estado',['Todos','🔴 Agotado','🟡 Bajo mínimo','🟢 Disponible'])
+        st.dataframe(df if filtro=='Todos' else df[df['Estado']==filtro],hide_index=True,use_container_width=True)
+    st.caption('Los límites provienen del campo Mínimo configurado en Inventario.')
+
+elif opcion == "📅 Próximas dotaciones":
+    st.title('📅 Próxima fecha de dotación')
+    st.caption('Cálculo orientativo: anual = 12 meses, semestral = 6 meses; al ingreso se revisa hasta la primera entrega. Las políticas especiales requieren revisión manual.')
+    con=conectar(); datos=calcular_proximas_dotaciones(con); con.close()
+    import pandas as pd
+    df=pd.DataFrame(datos)
+    if df.empty: st.info('Registra empleados y reglas de Matriz de Dotación para calcular fechas.')
+    else:
+        matricula=st.text_input('Buscar por matrícula o empleado')
+        if matricula: df=df[df['Matrícula'].astype(str).str.contains(matricula,case=False,regex=False)|df['Empleado'].str.contains(matricula,case=False,regex=False)]
+        st.dataframe(df,hide_index=True,use_container_width=True)
+        st.metric('Dotaciones vencidas o pendientes',int((df['Estado']=='Vencida / pendiente').sum()))
+
+elif opcion == "📉 Pronóstico":
+    st.title('📉 Pronóstico de abastecimiento')
+    horizonte=st.slider('Horizonte de planeación (días)',30,180,90,30)
+    con=conectar(); proximas=calcular_proximas_dotaciones(con)
+    inventario=con.execute('SELECT id,nombre,talla,existencia,minimo FROM prendas WHERE activo=1').fetchall()
+    pendientes=con.execute("""SELECT prenda_id,COALESCE(SUM(cantidad-cantidad_entregada),0)
+        FROM solicitudes_almacen WHERE estado IN ('Pendiente','Preparada','Parcial') GROUP BY prenda_id""").fetchall()
+    con.close()
+    pend=dict(pendientes); limite=date.today()+timedelta(days=horizonte)
+    # Se agrupa por nombre y talla; se cuenta la demanda programada de matriz, no una predicción estadística.
+    demanda={}
+    for fila in proximas:
+        try: vence=date.fromisoformat(fila['Próxima fecha'])
+        except ValueError: continue
+        if vence<=limite:
+            clave=(fila['Prenda'],fila['Talla']); demanda[clave]=demanda.get(clave,0)+fila['Cantidad']
+    import pandas as pd
+    filas=[]
+    for pid,nombre,talla,existencia,minimo in inventario:
+        programada=demanda.get((nombre,talla),0); solicitudes=pend.get(pid,0)
+        # Una solicitud puede representar la dotación programada: usar el máximo evita sumarlas dos veces.
+        necesidad=max(programada,solicitudes)
+        filas.append({'Prenda':nombre,'Talla':talla,'Existencia':existencia,'Mínimo':minimo,
+            'Demanda matriz':programada,'Solicitudes pendientes':solicitudes,'Necesidad estimada':necesidad,
+            'Compra sugerida':max(0,necesidad+minimo-existencia)})
+    df=pd.DataFrame(filas)
+    if df.empty: st.info('No hay prendas activas.')
+    else:
+        st.metric('Unidades sugeridas para abastecer',int(df['Compra sugerida'].sum()))
+        st.dataframe(df.sort_values('Compra sugerida',ascending=False),hide_index=True,use_container_width=True)
+    st.caption('Estimación de planeación, no orden de compra. Se utiliza el mayor valor entre matriz y solicitudes para evitar una posible doble contabilización; validar manualmente necesidades no coincidentes.')
+
+elif opcion == "↩️ Devoluciones":
+    st.title('↩️ Devoluciones de uniformes')
+    con=conectar()
+    empleados=con.execute('SELECT id,numero_empleado,nombre FROM empleados WHERE activo=1 ORDER BY nombre').fetchall()
+    prendas=con.execute('SELECT id,nombre,talla FROM prendas WHERE activo=1 ORDER BY nombre,talla').fetchall()
+    con.close()
+    if not empleados or not prendas: st.info('Se requieren empleados y prendas registradas.')
+    else:
+        with st.form('registrar_devolucion'):
+            empleado=st.selectbox('Trabajador',empleados,format_func=lambda x:f'{x[1]} - {x[2]}')
+            prenda=st.selectbox('Prenda devuelta',prendas,format_func=lambda x:f'{x[1]} - {x[2]}')
+            cantidad=st.number_input('Cantidad',min_value=1,step=1)
+            motivo=st.selectbox('Motivo',['Baja','Cambio de talla','Reposición','Otra causa'])
+            condicion=st.selectbox('Condición',['Reutilizable','No reutilizable','Pendiente de revisión'])
+            reintegrar=st.checkbox('Reintegrar unidades al inventario disponible',value=False)
+            observaciones=st.text_area('Observaciones')
+            guardar=st.form_submit_button('Registrar devolución')
+        if guardar:
+            if reintegrar and condicion!='Reutilizable': st.error('Solo las prendas reutilizables pueden reintegrarse al inventario.')
+            else:
+                con=conectar()
+                try:
+                    con.execute('BEGIN IMMEDIATE')
+                    con.execute("""INSERT INTO devoluciones (empleado_id,prenda_id,cantidad,fecha,motivo,condicion,reintegrada,usuario,observaciones)
+                        VALUES (?,?,?,?,?,?,?,?,?)""",(empleado[0],prenda[0],cantidad,ahora(),motivo,condicion,int(reintegrar),st.session_state.usuario,observaciones.strip()))
+                    if reintegrar:
+                        con.execute('UPDATE prendas SET existencia=existencia+? WHERE id=?',(cantidad,prenda[0]))
+                        con.execute("""INSERT INTO movimientos (prenda_id,tipo,cantidad,fecha,usuario,descripcion)
+                            VALUES (?,'ENTRADA',?,?,?,?)""",(prenda[0],cantidad,ahora(),st.session_state.usuario,f'Devolución reutilizable: {motivo}'))
+                    con.commit(); registrar_bitacora('Devoluciones','Registro',f'{empleado[1]} | {prenda[1]} | {cantidad} | Reintegrada: {reintegrar}')
+                    st.success('Devolución registrada correctamente.'); st.rerun()
+                except Exception as exc: con.rollback(); st.error(str(exc))
+                finally: con.close()
+    con=conectar()
+    historial=con.execute("""SELECT d.id,d.fecha,e.numero_empleado,e.nombre,p.nombre,p.talla,d.cantidad,d.motivo,d.condicion,d.reintegrada,d.usuario
+        FROM devoluciones d JOIN empleados e ON e.id=d.empleado_id JOIN prendas p ON p.id=d.prenda_id ORDER BY d.id DESC""").fetchall()
+    con.close()
+    if historial:
+        import pandas as pd
+        st.dataframe(pd.DataFrame(historial,columns=['Folio','Fecha','Matrícula','Empleado','Prenda','Talla','Cantidad','Motivo','Condición','Reintegrada','Usuario']),hide_index=True,use_container_width=True)
+
+
+# ============================================================
 # REPORTES
 # ============================================================
 elif opcion == "📑 Reportes":
@@ -2811,6 +3045,20 @@ elif opcion == "📑 Reportes":
             st.dataframe(df_inv, use_container_width=True, hide_index=True)
             if not df_inv.empty:
                 st.download_button("📥 Descargar inventario CSV", df_inv.to_csv(index=False).encode("utf-8-sig"), "reporte_inventario.csv", "text/csv", use_container_width=True)
+
+        st.divider()
+        st.subheader('📥 Reporte consolidado en Excel y PDF')
+        hojas={'Entregas':df_ent,'Movimientos':df_mov,'Inventario':df_inv}
+        try:
+            excel=generar_excel_reportes(hojas)
+            st.download_button('📗 Descargar Excel completo',excel,f'TNG_reporte_{fecha_inicio}_{fecha_fin}.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',use_container_width=True)
+        except ImportError: st.warning('Para Excel instala: pip install openpyxl')
+        try:
+            pdf=generar_pdf_reporte(hojas,fecha_inicio,fecha_fin)
+            st.download_button('📕 Descargar resumen PDF',pdf,f'TNG_reporte_{fecha_inicio}_{fecha_fin}.pdf',
+                mime='application/pdf',use_container_width=True)
+        except ImportError: st.warning('Para PDF instala: pip install reportlab')
 
         st.divider()
         st.subheader("📊 Resumen del periodo")
