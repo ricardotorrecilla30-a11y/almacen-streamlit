@@ -5,6 +5,8 @@ from datetime import datetime, date, timedelta
 import calendar
 from io import BytesIO
 import base64
+import shutil
+from pathlib import Path
 
 try:
     from streamlit_drawable_canvas import st_canvas
@@ -252,6 +254,22 @@ def inicializar_bd():
         fecha TEXT NOT NULL, motivo TEXT NOT NULL, condicion TEXT NOT NULL,
         reintegrada INTEGER NOT NULL DEFAULT 0, usuario TEXT NOT NULL, observaciones TEXT,
         FOREIGN KEY(empleado_id) REFERENCES empleados(id), FOREIGN KEY(prenda_id) REFERENCES prendas(id))""")
+
+    # Ampliaciones aditivas: no se eliminan registros históricos.
+    cursor.execute("""CREATE TABLE IF NOT EXISTS cambios_talla (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, empleado_id INTEGER NOT NULL,
+        campo TEXT NOT NULL, anterior TEXT, nueva TEXT NOT NULL,
+        motivo TEXT NOT NULL, fecha TEXT NOT NULL, usuario TEXT NOT NULL,
+        FOREIGN KEY(empleado_id) REFERENCES empleados(id))""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS bajas_trabajadores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, empleado_id INTEGER NOT NULL,
+        fecha TEXT NOT NULL, motivo TEXT NOT NULL, usuario TEXT NOT NULL,
+        FOREIGN KEY(empleado_id) REFERENCES empleados(id))""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS catalogo_motivos_reposicion (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, motivo TEXT NOT NULL UNIQUE,
+        activo INTEGER NOT NULL DEFAULT 1)""")
+    for motivo in ('Desgaste','Daño','Cambio de talla','Cambio de puesto','Pérdida','Otro'):
+        cursor.execute('INSERT OR IGNORE INTO catalogo_motivos_reposicion(motivo) VALUES (?)',(motivo,))
 
     # Usuarios iniciales para demostración
     usuarios_iniciales = [
@@ -507,6 +525,57 @@ def cerrar_sesion():
 inicializar_bd()
 
 
+def respaldo_automatico():
+    """Una copia diaria consistente de SQLite; no sobreescribe respaldos anteriores."""
+    destino = Path(DB_NAME).resolve().parent / 'respaldos_tng'
+    destino.mkdir(exist_ok=True)
+    ruta = destino / ('tng_uniformes_' + date.today().isoformat() + '.db')
+    if not ruta.exists():
+        origen = conectar()
+        try:
+            with sqlite3.connect(str(ruta)) as copia:
+                origen.backup(copia)
+        finally:
+            origen.close()
+    return ruta
+
+
+def buscar_asistente(pregunta, rol):
+    """Consultas de solo lectura, parametrizadas y sin servicios externos."""
+    import re
+    q = pregunta.strip()
+    ql = q.casefold()
+    con = conectar()
+    try:
+        if any(w in ql for w in ('matrícula','matricula','trabajador','empleado','persona','expediente','busca','encuentra')):
+            if rol != 'Relaciones Laborales':
+                return 'La búsqueda de datos personales está disponible únicamente para Relaciones Laborales.'
+            patron = re.sub(r'(?i)\b(busca|buscar|encuentra|encontrar|la|el|matrícula|matricula|de|del|trabajador|empleado|persona|expediente|por|nombre|cuál|cual|es|quiero|ver)\b', ' ', q)
+            patron = ' '.join(patron.split()).strip(' ?¿')
+            if len(patron) < 2:
+                return 'Indica al menos dos caracteres del nombre o la matrícula. Ejemplo: Busca Juan Pérez.'
+            filas = con.execute('SELECT numero_empleado,nombre,puesto,area,activo FROM empleados WHERE nombre LIKE ? OR numero_empleado LIKE ? ORDER BY activo DESC,nombre LIMIT 10',('%'+patron+'%','%'+patron+'%')).fetchall()
+            if not filas:
+                return 'No encontré coincidencias. Prueba con parte del nombre, apellido o matrícula.'
+            return 'Coincidencias registradas:\n' + '\n'.join(f'- {m} — {n} — {puesto} / {area} — {"Activo" if activo else "Inactivo"}' for m,n,puesto,area,activo in filas)
+        if any(w in ql for w in ('stock','existencia','disponible','inventario','hay ','bota','overall','camisola','pantalón','pantalon')):
+            terminos = ['duramax','petroleras','mr','overall','camisola','pantalón','pantalon','botas']
+            tipo = next((t for t in terminos if t in ql),None)
+            if not tipo:
+                return 'Indica una prenda. Ejemplo: ¿Hay botas DURAMAX número 27?'
+            numeros = re.findall(r'(?<!\d)(?:2[2-9]|3[0-9]|4[0-9]|5[0-2])(?!\d)',ql)
+            talla = numeros[-1] if numeros else None
+            filas = con.execute('SELECT nombre,talla,existencia FROM prendas WHERE activo=1 AND LOWER(nombre) LIKE ? AND (? IS NULL OR talla=?) ORDER BY nombre,talla LIMIT 30',('%'+tipo+'%',talla,talla)).fetchall()
+            if not filas: return 'No hay coincidencias registradas para esa prenda y talla.'
+            return 'Existencias registradas:\n'+'\n'.join(f'- {n}, talla {t}: {e} unidades' for n,t,e in filas)
+        if any(w in ql for w in ('solicitud','pendiente')):
+            filas=con.execute("SELECT estado,COUNT(*) FROM solicitudes_almacen GROUP BY estado ORDER BY estado").fetchall()
+            return 'Solicitudes por estado:\n'+'\n'.join(f'- {estado}: {n}' for estado,n in filas) if filas else 'No hay solicitudes registradas.'
+        return 'Puedo buscar matrículas (solo Relaciones Laborales), consultar existencias de prendas y tallas o resumir estados de solicitudes. No modifico registros desde el chat.'
+    finally:
+        con.close()
+
+
 def semaforo(existencia, minimo):
     if existencia <= 0:
         return "🔴 Agotado"
@@ -684,6 +753,11 @@ if not st.session_state.logged_in:
     st.stop()
 
 
+try:
+    respaldo_automatico()
+except (OSError, sqlite3.Error) as error:
+    st.warning(f"No fue posible crear el respaldo diario: {error}")
+
 # ============================================================
 # BARRA LATERAL
 # ============================================================
@@ -706,6 +780,7 @@ opciones = []
 
 if rol in ["Relaciones Laborales"]:
     opciones.append("👥 Empleados")
+    opciones.extend(["🗂️ Expediente y bajas", "📏 Cambios de talla", "⚙️ Motivos de reposición", "💾 Respaldos"])
 
 if rol in ["Relaciones Laborales", "Almacén", "Solicitante de área"]:
     opciones.append("📨 Solicitudes a Almacén")
@@ -748,6 +823,9 @@ if rol in ["Relaciones Laborales", "Almacén"]:
 
 if rol in ["Relaciones Laborales", "Almacén"]:
     opciones.append("📝 Bitácora")
+
+if rol in ["Relaciones Laborales", "Almacén"]:
+    opciones.extend(["🔔 Notificaciones", "📊 Indicadores KPI", "🤖 Asistente TNG"])
 
 opcion = st.sidebar.radio(
     "Menú",
@@ -1795,17 +1873,10 @@ elif opcion == "🔄 Reposiciones":
                 step=1
             )
 
-            motivo = st.selectbox(
-                "Motivo",
-                [
-                    "Desgaste",
-                    "Daño",
-                    "Cambio de talla",
-                    "Cambio de puesto",
-                    "Pérdida",
-                    "Otro"
-                ]
-            )
+            with conectar() as cm:
+                motivos_disponibles = [r[0] for r in cm.execute(
+                    "SELECT motivo FROM catalogo_motivos_reposicion WHERE activo=1 ORDER BY motivo")]
+            motivo = st.selectbox("Motivo", motivos_disponibles)
 
             observaciones = st.text_area(
                 "Observaciones"
@@ -3068,6 +3139,147 @@ elif opcion == "📑 Reportes":
         r3.metric("Movimientos", len(df_mov))
         r4.metric("Prendas bajo mínimo", int((df_inv["Existencia"] <= df_inv["Mínimo"]).sum()) if not df_inv.empty else 0)
 
+
+# ============================================================
+# NUEVOS MÓDULOS (migraciones aditivas)
+# ============================================================
+elif opcion == "🗂️ Expediente y bajas":
+    st.title("🗂️ Expediente digital y control de bajas")
+    with conectar() as con:
+        empleados=con.execute("SELECT id,numero_empleado,nombre,puesto,area,disciplina,tipo_trabajador,talla_camisa,talla_pantalon,fecha_ingreso,activo FROM empleados ORDER BY nombre").fetchall()
+    if not empleados: st.info("No hay trabajadores registrados.")
+    else:
+        filtrado=st.text_input("Buscar por nombre o matrícula",key="exp_buscar").casefold().strip()
+        candidatos=[e for e in empleados if filtrado in (e[1]+' '+e[2]).casefold()]
+        if not candidatos: st.info("Sin coincidencias.")
+        else:
+            elegido=st.selectbox("Trabajador",candidatos,format_func=lambda e:f"{e[1]} — {e[2]} ({'Activo' if e[-1] else 'Inactivo'})")
+            eid,mat,nombre,puesto,area,disc,tipo,cam,pant,ingreso,activo=elegido
+            st.write({"Matrícula":mat,"Nombre":nombre,"Puesto":puesto,"Área":area,"Disciplina":disc,"Tipo":tipo,"Camisola":cam,"Pantalón":pant,"Ingreso":ingreso,"Estado":"Activo" if activo else "Inactivo"})
+            with conectar() as con:
+                for titulo,sql in [
+                    ('Entregas',"SELECT e.fecha,p.nombre,p.talla,e.cantidad,e.responsable FROM entregas e JOIN prendas p ON p.id=e.prenda_id WHERE e.empleado_id=? ORDER BY e.fecha DESC"),
+                    ('Solicitudes',"SELECT s.fecha_solicitud,p.nombre,p.talla,s.cantidad,s.estado FROM solicitudes_almacen s JOIN prendas p ON p.id=s.prenda_id WHERE s.empleado_id=? ORDER BY s.fecha_solicitud DESC"),
+                    ('Reposiciones',"SELECT r.fecha_solicitud,p.nombre,p.talla,r.cantidad,r.motivo,r.estado FROM reposiciones r JOIN prendas p ON p.id=r.prenda_id WHERE r.empleado_id=? ORDER BY r.fecha_solicitud DESC"),
+                    ('Devoluciones',"SELECT d.fecha,p.nombre,p.talla,d.cantidad,d.motivo FROM devoluciones d JOIN prendas p ON p.id=d.prenda_id WHERE d.empleado_id=? ORDER BY d.fecha DESC"),
+                    ('Cambios de talla',"SELECT fecha,campo,anterior,nueva,motivo,usuario FROM cambios_talla WHERE empleado_id=? ORDER BY fecha DESC")]:
+                    with st.expander(titulo):
+                        st.dataframe(con.execute(sql,(eid,)).fetchall(),use_container_width=True)
+            if activo:
+                with st.form('baja_form'):
+                    motivo_baja=st.text_area('Motivo de baja *')
+                    confirmar=st.checkbox('Confirmo la baja del trabajador')
+                    if st.form_submit_button('Registrar baja'):
+                        if not motivo_baja.strip() or not confirmar: st.error('Indica el motivo y confirma la baja.')
+                        else:
+                            with conectar() as con:
+                                con.execute('UPDATE empleados SET activo=0 WHERE id=? AND activo=1',(eid,))
+                                con.execute('INSERT INTO bajas_trabajadores(empleado_id,fecha,motivo,usuario) VALUES(?,?,?,?)',(eid,ahora(),motivo_baja.strip(),st.session_state.usuario))
+                            registrar_bitacora('Empleados','Baja',f'Matrícula {mat}: {motivo_baja.strip()}')
+                            st.success('Trabajador desactivado; se conserva su historial.');st.rerun()
+            else: st.info('Trabajador inactivo. Su expediente histórico permanece disponible.')
+
+elif opcion == "📏 Cambios de talla":
+    st.title('📏 Historial de cambios de talla')
+    with conectar() as con:
+        trabajadores=con.execute('SELECT id,numero_empleado,nombre,talla_camisa,talla_pantalon FROM empleados WHERE activo=1 ORDER BY nombre').fetchall()
+    if trabajadores:
+        with st.form('cambio_talla'):
+            e=st.selectbox('Trabajador',trabajadores,format_func=lambda r:f'{r[1]} — {r[2]}')
+            campo=st.selectbox('Prenda',['talla_camisa','talla_pantalon'],format_func=lambda c:'Camisola' if c=='talla_camisa' else 'Pantalón')
+            nueva=st.selectbox('Nueva talla',[str(n) for n in range(28,53,2)])
+            motivo=st.text_input('Motivo *')
+            if st.form_submit_button('Guardar cambio'):
+                anterior=e[3] if campo=='talla_camisa' else e[4]
+                if not motivo.strip(): st.error('El motivo es obligatorio.')
+                elif anterior==nueva: st.info('La talla seleccionada es igual a la actual.')
+                else:
+                    with conectar() as con:
+                        con.execute(f'UPDATE empleados SET {campo}=? WHERE id=?',(nueva,e[0]))
+                        con.execute('INSERT INTO cambios_talla(empleado_id,campo,anterior,nueva,motivo,fecha,usuario) VALUES(?,?,?,?,?,?,?)',(e[0],campo,anterior,nueva,motivo.strip(),ahora(),st.session_state.usuario))
+                    registrar_bitacora('Empleados','Cambio de talla',f'{e[1]} {campo}: {anterior} -> {nueva}')
+                    st.success('Cambio guardado.');st.rerun()
+    else: st.info('No hay trabajadores activos.')
+
+elif opcion == "⚙️ Motivos de reposición":
+    st.title('⚙️ Catálogo de motivos de reposición')
+    with conectar() as con:
+        filas=con.execute('SELECT id,motivo,activo FROM catalogo_motivos_reposicion ORDER BY motivo').fetchall()
+    st.dataframe([{'ID':i,'Motivo':m,'Activo':bool(a)} for i,m,a in filas],hide_index=True,use_container_width=True)
+    with st.form('nuevo_motivo'):
+        nombre=st.text_input('Nuevo motivo *')
+        if st.form_submit_button('Agregar motivo'):
+            if not nombre.strip(): st.error('Escribe un motivo.')
+            else:
+                try:
+                    with conectar() as con: con.execute('INSERT INTO catalogo_motivos_reposicion(motivo) VALUES(?)',(nombre.strip(),))
+                    registrar_bitacora('Reposiciones','Nuevo motivo',nombre.strip());st.rerun()
+                except sqlite3.IntegrityError: st.error('Ese motivo ya existe.')
+    if filas:
+        seleccionado=st.selectbox('Activar/desactivar motivo',filas,format_func=lambda r:f'{r[1]} — {"Activo" if r[2] else "Inactivo"}')
+        if st.button('Cambiar estado'):
+            with conectar() as con: con.execute('UPDATE catalogo_motivos_reposicion SET activo=? WHERE id=?',(0 if seleccionado[2] else 1,seleccionado[0]))
+            registrar_bitacora('Reposiciones','Estado motivo',seleccionado[1]);st.rerun()
+
+elif opcion == "💾 Respaldos":
+    st.title('💾 Respaldo de la base de datos')
+    st.info('Se genera un respaldo diario en la carpeta respaldos_tng, junto a la base de datos. Mantén también copias en una ubicación segura distinta.')
+    if st.button('Crear respaldo ahora'):
+        destino=Path(DB_NAME).resolve().parent/'respaldos_tng';destino.mkdir(exist_ok=True)
+        ruta=destino/('tng_uniformes_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'.db')
+        with conectar() as origen, sqlite3.connect(str(ruta)) as copia: origen.backup(copia)
+        st.success(f'Respaldo creado: {ruta.name}')
+        registrar_bitacora('Respaldos','Respaldo manual',ruta.name)
+    ruta=respaldo_automatico()
+    st.caption(f'Respaldo diario: {ruta.name}')
+    st.download_button('Descargar respaldo diario',data=ruta.read_bytes(),file_name=ruta.name,mime='application/octet-stream')
+
+elif opcion == "🔔 Notificaciones":
+    st.title('🔔 Centro de notificaciones')
+    with conectar() as con:
+        bajas=con.execute('SELECT nombre,talla,existencia,minimo FROM prendas WHERE activo=1 AND existencia<=minimo ORDER BY existencia').fetchall()
+        solicitudes=con.execute("SELECT estado,COUNT(*) FROM solicitudes_almacen WHERE estado NOT IN ('Entregada','Rechazada','Cancelada') GROUP BY estado").fetchall()
+        proximas=calcular_proximas_dotaciones(con)
+    st.subheader('Existencias bajas')
+    if bajas: st.dataframe([{'Prenda':n,'Talla':t,'Existencia':e,'Mínimo':m} for n,t,e,m in bajas],hide_index=True,use_container_width=True)
+    else: st.success('Sin alertas de inventario bajo.')
+    st.subheader('Solicitudes abiertas')
+    st.write(dict(solicitudes) if solicitudes else 'No hay solicitudes abiertas.')
+    st.subheader('Dotaciones vencidas o próximas en 30 días')
+    limite=date.today()+timedelta(days=30)
+    alertas=[r for r in proximas if r['Próxima fecha']!='Por definir' and r['Próxima fecha']<=limite.isoformat()]
+    st.dataframe(alertas,use_container_width=True,hide_index=True) if alertas else st.success('Sin dotaciones próximas identificadas.')
+
+elif opcion == "📊 Indicadores KPI":
+    st.title('📊 Indicadores de gestión')
+    with conectar() as con:
+        activos=con.execute('SELECT COUNT(*) FROM empleados WHERE activo=1').fetchone()[0]
+        prendas=con.execute('SELECT COUNT(*) FROM prendas WHERE activo=1').fetchone()[0]
+        bajas=con.execute('SELECT COUNT(*) FROM prendas WHERE activo=1 AND existencia<=minimo').fetchone()[0]
+        pendientes=con.execute("SELECT COUNT(*) FROM solicitudes_almacen WHERE estado NOT IN ('Entregada','Rechazada','Cancelada')").fetchone()[0]
+        entregadas=con.execute('SELECT COALESCE(SUM(cantidad),0) FROM entregas').fetchone()[0]
+        total=con.execute('SELECT COUNT(*) FROM solicitudes_almacen').fetchone()[0]
+        completas=con.execute("SELECT COUNT(*) FROM solicitudes_almacen WHERE estado='Entregada'").fetchone()[0]
+    c1,c2,c3=st.columns(3)
+    c1.metric('Trabajadores activos',activos);c2.metric('Prendas en catálogo',prendas);c3.metric('Prendas con alerta',bajas)
+    c4,c5,c6=st.columns(3)
+    c4.metric('Solicitudes abiertas',pendientes);c5.metric('Unidades entregadas (histórico)',entregadas);c6.metric('Solicitudes completadas',f'{completas}/{total}')
+    st.metric('Porcentaje de solicitudes completadas',f'{(100*completas/total):.1f}%' if total else 'Sin datos')
+    st.caption('Los KPI se calculan a partir de los registros de la base de datos; no son valores simulados.')
+
+elif opcion == "🤖 Asistente TNG":
+    st.title('🤖 Asistente TNG')
+    st.caption('Asistente local de consulta. No usa IA externa, no modifica registros y no inventa matrículas.')
+    if 'tng_chat' not in st.session_state: st.session_state.tng_chat=[]
+    for pregunta,respuesta in st.session_state.tng_chat:
+        with st.chat_message('user'): st.write(pregunta)
+        with st.chat_message('assistant'): st.markdown(respuesta)
+    pregunta=st.chat_input('Ejemplo: Busca Juan Pérez / ¿Hay botas DURAMAX 27?')
+    if pregunta:
+        respuesta=buscar_asistente(pregunta,rol)
+        st.session_state.tng_chat.append((pregunta,respuesta))
+        with st.chat_message('user'): st.write(pregunta)
+        with st.chat_message('assistant'): st.markdown(respuesta)
 
 # ============================================================
 # BITÁCORA
