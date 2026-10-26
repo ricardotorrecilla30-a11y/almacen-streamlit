@@ -6,6 +6,10 @@ import calendar
 from io import BytesIO
 import base64
 import shutil
+import secrets
+import hmac
+import os
+import re
 from pathlib import Path
 
 try:
@@ -32,7 +36,7 @@ st.set_page_config(
     layout="wide"
 )
 
-DB_NAME = "tng_uniformes.db"
+DB_NAME = os.environ.get("TNG_DB_PATH", str(Path(__file__).resolve().parent / "tng_uniformes.db"))
 
 
 # ============================================================
@@ -40,7 +44,9 @@ DB_NAME = "tng_uniformes.db"
 # ============================================================
 
 def conectar():
-    return sqlite3.connect(DB_NAME)
+    con = sqlite3.connect(DB_NAME, timeout=30)
+    con.execute("PRAGMA busy_timeout=30000")
+    return con
 
 
 def hash_password(password):
@@ -270,6 +276,17 @@ def inicializar_bd():
         activo INTEGER NOT NULL DEFAULT 1)""")
     for motivo in ('Desgaste','Daño','Cambio de talla','Cambio de puesto','Pérdida','Otro'):
         cursor.execute('INSERT OR IGNORE INTO catalogo_motivos_reposicion(motivo) VALUES (?)',(motivo,))
+
+    # Migraciones adicionales: recuperación, firmas de autorización y concurrencia.
+    cursor.execute("""CREATE TABLE IF NOT EXISTS autorizaciones_firmadas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, solicitud_id INTEGER NOT NULL UNIQUE,
+        usuario TEXT NOT NULL, fecha TEXT NOT NULL, firma TEXT NOT NULL,
+        comentario TEXT, FOREIGN KEY(solicitud_id) REFERENCES solicitudes_almacen(id))""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS restablecimientos_clave (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, usuario TEXT NOT NULL, fecha TEXT NOT NULL,
+        autorizado_por TEXT NOT NULL, debe_cambiar INTEGER NOT NULL DEFAULT 1)""")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_movimientos_prenda_fecha ON movimientos(prenda_id,fecha)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_solicitudes_estado ON solicitudes_almacen(estado)")
 
     # Usuarios iniciales para demostración
     usuarios_iniciales = [
@@ -568,12 +585,29 @@ def buscar_asistente(pregunta, rol):
             filas = con.execute('SELECT nombre,talla,existencia FROM prendas WHERE activo=1 AND LOWER(nombre) LIKE ? AND (? IS NULL OR talla=?) ORDER BY nombre,talla LIMIT 30',('%'+tipo+'%',talla,talla)).fetchall()
             if not filas: return 'No hay coincidencias registradas para esa prenda y talla.'
             return 'Existencias registradas:\n'+'\n'.join(f'- {n}, talla {t}: {e} unidades' for n,t,e in filas)
+        if any(w in ql for w in ('ayuda','cómo','como','instrucciones')):
+            return ("Puedo orientarte: para registrar una entrega utiliza Entregas; para una devolución, "
+                    "Devoluciones; para revisar una prenda, Historial por prenda o Kardex. "
+                    "Para buscar una matrícula, escribe 'Busca' seguido del nombre (solo Relaciones Laborales).")
+        if any(w in ql for w in ('agotad','bajo stock','stock bajo','abastec')):
+            filas=con.execute("""SELECT nombre,talla,existencia,minimo FROM prendas
+                WHERE activo=1 AND existencia<=minimo ORDER BY existencia,nombre LIMIT 20""").fetchall()
+            return ('Prendas que requieren atención:\\n'+'\\n'.join(
+                f'- {n} talla {t}: {e} disponibles; mínimo {m}' for n,t,e,m in filas)) if filas else 'No hay prendas bajo el mínimo registrado.'
         if any(w in ql for w in ('solicitud','pendiente')):
             filas=con.execute("SELECT estado,COUNT(*) FROM solicitudes_almacen GROUP BY estado ORDER BY estado").fetchall()
             return 'Solicitudes por estado:\n'+'\n'.join(f'- {estado}: {n}' for estado,n in filas) if filas else 'No hay solicitudes registradas.'
         return 'Puedo buscar matrículas (solo Relaciones Laborales), consultar existencias de prendas y tallas o resumir estados de solicitudes. No modifico registros desde el chat.'
     finally:
         con.close()
+
+
+def excel_historial(df):
+    import pandas as pd
+    out=BytesIO()
+    with pd.ExcelWriter(out,engine="openpyxl") as writer:
+        df.to_excel(writer,index=False,sheet_name="Historial")
+    return out.getvalue()
 
 
 def semaforo(existencia, minimo):
@@ -744,6 +778,9 @@ if not st.session_state.logged_in:
                     "❌ Usuario o contraseña incorrectos."
                 )
 
+    with st.expander("¿Olvidaste tu contraseña?"):
+        st.info("Solicita a Relaciones Laborales un restablecimiento de contraseña. Por seguridad, no se muestra si existe un usuario ni se envían contraseñas por el chatbot.")
+
     st.info(
         "Usuarios de demostración (Relaciones Laborales y Almacén): "
         "admin / admin123, "
@@ -758,6 +795,27 @@ try:
 except (OSError, sqlite3.Error) as error:
     st.warning(f"No fue posible crear el respaldo diario: {error}")
 
+# Obligar a cambiar contraseñas temporales antes de acceder a los módulos.
+with conectar() as _con:
+    _debe_cambiar=_con.execute("""SELECT COUNT(*) FROM restablecimientos_clave
+        WHERE usuario=? AND debe_cambiar=1""",(st.session_state.usuario,)).fetchone()[0]
+if _debe_cambiar:
+    st.title("🔐 Cambia tu contraseña temporal")
+    with st.form("cambio_obligatorio"):
+        nueva=st.text_input("Nueva contraseña (mínimo 12 caracteres)",type="password")
+        repetida=st.text_input("Confirmar nueva contraseña",type="password")
+        guardar=st.form_submit_button("Guardar y continuar")
+    if guardar:
+        if len(nueva)<12 or nueva!=repetida:
+            st.error("Usa al menos 12 caracteres y confirma correctamente.")
+        else:
+            with conectar() as _con:
+                _con.execute("UPDATE usuarios SET password=? WHERE usuario=?",(hash_password(nueva),st.session_state.usuario))
+                _con.execute("UPDATE restablecimientos_clave SET debe_cambiar=0 WHERE usuario=?",(st.session_state.usuario,))
+            registrar_bitacora("Usuarios","Cambio obligatorio de clave","Contraseña temporal reemplazada")
+            st.rerun()
+    st.stop()
+
 # ============================================================
 # BARRA LATERAL
 # ============================================================
@@ -770,6 +828,7 @@ st.sidebar.write(
     f"🔑 Rol: **{st.session_state.rol}**"
 )
 
+st.sidebar.caption("Acceso compartido: todas las áreas deben abrir la misma instancia Streamlit y usar la misma base de datos en el servidor. No compartas el archivo SQLite por una carpeta de red.")
 st.sidebar.divider()
 
 
@@ -779,6 +838,7 @@ rol = st.session_state.rol
 opciones = []
 
 if rol in ["Relaciones Laborales"]:
+    opciones.append("🔐 Gestión de contraseñas")
     opciones.append("👥 Empleados")
     opciones.extend(["🗂️ Expediente y bajas", "📏 Cambios de talla", "⚙️ Motivos de reposición", "💾 Respaldos"])
 
@@ -811,6 +871,7 @@ if rol in ["Relaciones Laborales", "Almacén"]:
 
 if rol in ["Relaciones Laborales", "Almacén"]:
     opciones.append("📦 Kardex")
+    opciones.append("📜 Historial por prenda")
 
 if rol in ["Relaciones Laborales", "Almacén"]:
     opciones.append("⚠️ Alertas")
@@ -825,7 +886,7 @@ if rol in ["Relaciones Laborales", "Almacén"]:
     opciones.append("📝 Bitácora")
 
 if rol in ["Relaciones Laborales", "Almacén"]:
-    opciones.extend(["🔔 Notificaciones", "📊 Indicadores KPI", "🤖 Asistente TNG"])
+    opciones.extend(["🔔 Notificaciones", "📊 Indicadores KPI", "🤖 Asistente TNG 2.0"])
 
 opcion = st.sidebar.radio(
     "Menú",
@@ -842,6 +903,62 @@ if st.sidebar.button(
 # ============================================================
 # EMPLEADOS
 # ============================================================
+
+if opcion == "🔐 Gestión de contraseñas":
+    st.title("🔐 Recuperación administrada de contraseñas")
+    st.caption("Solo Relaciones Laborales puede generar una contraseña temporal. El usuario deberá cambiarla al iniciar sesión.")
+    with conectar() as con:
+        cuentas=con.execute("SELECT usuario,rol FROM usuarios WHERE activo=1 ORDER BY usuario").fetchall()
+    cuenta=st.selectbox("Cuenta a restablecer",[u for u,r in cuentas])
+    confirmacion=st.checkbox("He verificado la identidad de la persona por un procedimiento interno")
+    if st.button("Generar contraseña temporal",disabled=not confirmacion):
+        temporal=secrets.token_urlsafe(12)
+        with conectar() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("UPDATE usuarios SET password=? WHERE usuario=? AND activo=1",(hash_password(temporal),cuenta))
+            con.execute("INSERT INTO restablecimientos_clave(usuario,fecha,autorizado_por) VALUES (?,?,?)",
+                        (cuenta,ahora(),st.session_state.usuario))
+        registrar_bitacora("Usuarios","Restablecimiento de clave",f"Cuenta: {cuenta}")
+        st.warning("Copia la contraseña temporal ahora; no se guardará en texto legible.")
+        st.code(temporal)
+    st.divider()
+    st.subheader("Cambiar mi contraseña")
+    with st.form("cambiar_clave_propia"):
+        actual=st.text_input("Contraseña actual",type="password")
+        nueva=st.text_input("Nueva contraseña (mínimo 12 caracteres)",type="password")
+        confirmar=st.text_input("Repite la nueva contraseña",type="password")
+        cambiar=st.form_submit_button("Actualizar contraseña")
+    if cambiar:
+        with conectar() as con:
+            row=con.execute("SELECT password FROM usuarios WHERE usuario=?",(st.session_state.usuario,)).fetchone()
+            if not row or not hmac.compare_digest(row[0],hash_password(actual)):
+                st.error("La contraseña actual no coincide.")
+            elif len(nueva)<12 or nueva!=confirmar:
+                st.error("La nueva contraseña debe tener al menos 12 caracteres y coincidir.")
+            else:
+                con.execute("UPDATE usuarios SET password=? WHERE usuario=?",(hash_password(nueva),st.session_state.usuario))
+                con.execute("UPDATE restablecimientos_clave SET debe_cambiar=0 WHERE usuario=?",(st.session_state.usuario,))
+                st.success("Contraseña actualizada.")
+                registrar_bitacora("Usuarios","Cambio de contraseña","Cuenta propia")
+
+elif opcion == "📜 Historial por prenda":
+    st.title("📜 Historial de movimientos por prenda")
+    with conectar() as con:
+        prendas_hist=con.execute("SELECT id,nombre,talla,existencia FROM prendas ORDER BY nombre,talla").fetchall()
+    if prendas_hist:
+        mapa={f"{n} · Talla {t} · ID {pid}":(pid,n,t,e) for pid,n,t,e in prendas_hist}
+        sel=st.selectbox("Prenda y talla",list(mapa))
+        pid,n,t,e=mapa[sel]
+        with conectar() as con:
+            filas=con.execute("""SELECT fecha,tipo,cantidad,usuario,COALESCE(descripcion,'')
+                FROM movimientos WHERE prenda_id=? ORDER BY fecha DESC,id DESC""",(pid,)).fetchall()
+        st.metric("Existencia actual",e)
+        import pandas as pd
+        df=pd.DataFrame(filas,columns=["Fecha","Tipo","Cantidad","Usuario","Descripción"])
+        st.dataframe(df,use_container_width=True,hide_index=True)
+        st.download_button("Descargar historial Excel",data=excel_historial(df),
+            file_name=f"historial_prenda_{pid}.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    else: st.info("No hay prendas registradas.")
 
 if opcion == "👥 Empleados":
 
@@ -1174,20 +1291,37 @@ elif opcion == "📨 Solicitudes a Almacén":
             if historial:
                 st.dataframe([{'Acuse / entrega':h[0],'Cantidad':h[1],'Fecha':h[2],'Responsable':h[3]} for h in historial],hide_index=True,use_container_width=True)
             if rol == "Relaciones Laborales" and estado_sol == "Por autorizar":
+                st.caption("Para autorizar se requiere firma manuscrita del responsable. El rechazo no requiere firma.")
+                firma_aut_canvas = None
+                if st_canvas is not None:
+                    firma_aut_canvas = st_canvas(fill_color="rgba(255,255,255,0)", stroke_width=3,
+                        stroke_color="#111111", background_color="#FFFFFF", height=160, width=540,
+                        drawing_mode="freedraw", display_toolbar=True, key=f"firma_autorizacion_{sid}")
+                else:
+                    st.warning("Para autorizar instala streamlit-drawable-canvas y numpy.")
                 with st.form(f"autorizacion_area_{sid}"):
                     comentario_rl = st.text_area("Comentario de Relaciones Laborales")
                     ca, cr = st.columns(2)
                     autorizar_area = ca.form_submit_button("✅ Autorizar y enviar a Almacén")
                     rechazar_area = cr.form_submit_button("❌ Rechazar solicitud")
                 if autorizar_area or rechazar_area:
+                    import numpy as np
+                    pix = firma_aut_canvas.image_data if firma_aut_canvas is not None else None
+                    firma_valida = pix is not None and bool(np.any(np.asarray(pix)[:, :, :3] < 180))
                     if rechazar_area and not comentario_rl.strip():
                         st.error("Escribe el motivo del rechazo.")
+                    elif autorizar_area and not firma_valida:
+                        st.error("Dibuja tu firma antes de autorizar.")
                     else:
                         con = conectar()
                         try:
                             estado_nuevo = "Pendiente" if autorizar_area else "Rechazada"
                             cur = con.execute("""UPDATE solicitudes_almacen SET estado=?, autorizado_por=?, fecha_autorizacion=?, respuesta=?
                                 WHERE id=? AND estado='Por autorizar'""", (estado_nuevo,st.session_state.usuario,ahora(),comentario_rl.strip(),sid))
+                            if cur.rowcount and autorizar_area:
+                                con.execute("""INSERT INTO autorizaciones_firmadas(solicitud_id,usuario,fecha,firma,comentario)
+                                    VALUES (?,?,?,?,?)""",(sid,st.session_state.usuario,ahora(),
+                                    firma_a_base64(pix),comentario_rl.strip()))
                             con.commit()
                             if cur.rowcount:
                                 registrar_bitacora("Solicitudes a Almacén", estado_nuevo, f"Solicitud de área #{sid}")
@@ -3267,7 +3401,7 @@ elif opcion == "📊 Indicadores KPI":
     st.metric('Porcentaje de solicitudes completadas',f'{(100*completas/total):.1f}%' if total else 'Sin datos')
     st.caption('Los KPI se calculan a partir de los registros de la base de datos; no son valores simulados.')
 
-elif opcion == "🤖 Asistente TNG":
+elif opcion == "🤖 Asistente TNG 2.0":
     st.title('🤖 Asistente TNG')
     st.caption('Asistente local de consulta. No usa IA externa, no modifica registros y no inventa matrículas.')
     if 'tng_chat' not in st.session_state: st.session_state.tng_chat=[]
