@@ -888,10 +888,31 @@ if rol in ["Relaciones Laborales", "Almacén"]:
 if rol in ["Relaciones Laborales", "Almacén"]:
     opciones.extend(["🔔 Notificaciones", "📊 Indicadores KPI", "🤖 Asistente TNG 2.0"])
 
-opcion = st.sidebar.radio(
-    "Menú",
-    opciones
-)
+# Navegación compacta: conserva cada módulo y limita las opciones por rol.
+GRUPOS_MENU = {
+    "🏠 Inicio": [],
+    "👥 Trabajadores": ["👥 Empleados", "🗂️ Expediente y bajas", "📏 Cambios de talla", "📋 Matriz de Dotación"],
+    "📦 Inventario": ["👕 Inventario", "🏭 Almacén", "📦 Kardex", "📜 Historial por prenda", "🚦 Semáforo", "⚠️ Alertas", "📉 Pronóstico"],
+    "🚚 Entregas": ["📦 Entregas", "✍️ Acuses y firmas", "🔄 Reposiciones", "↩️ Devoluciones", "📅 Próximas dotaciones"],
+    "📨 Solicitudes": ["📨 Solicitudes a Almacén", "⚙️ Motivos de reposición"],
+    "📊 Reportes": ["📊 Dashboard", "📊 Indicadores KPI", "📈 Frecuencias", "📑 Reportes", "📝 Bitácora"],
+    "🔔 Avisos": ["🔔 Notificaciones"],
+    "🤖 Asistente TNG": ["🤖 Asistente TNG 2.0"],
+    "⚙️ Configuración": ["🔐 Gestión de contraseñas", "💾 Respaldos"],
+}
+grupos_visibles = ["🏠 Inicio"] + [
+    grupo for grupo, modulos in GRUPOS_MENU.items()
+    if grupo != "🏠 Inicio" and any(modulo in opciones for modulo in modulos)
+]
+st.sidebar.markdown("### TNG")
+st.sidebar.caption("Control y Trazabilidad de Uniformes")
+grupo = st.sidebar.radio("Menú principal", grupos_visibles, key="tng_grupo")
+if grupo == "🏠 Inicio":
+    opcion = "__inicio__"
+else:
+    disponibles = [m for m in GRUPOS_MENU[grupo] if m in opciones]
+    opcion = st.sidebar.radio("Opciones", disponibles, key="tng_modulo_" + grupo)
+st.sidebar.divider()
 
 if st.sidebar.button(
     "🚪 Cerrar sesión",
@@ -904,7 +925,27 @@ if st.sidebar.button(
 # EMPLEADOS
 # ============================================================
 
-if opcion == "🔐 Gestión de contraseñas":
+if opcion == "__inicio__":
+    st.title("TNG | Control y Trazabilidad de Uniformes")
+    st.caption("Bienvenido. Selecciona una sección del menú o utiliza un acceso rápido.")
+    if rol in ("Relaciones Laborales", "Almacén"):
+        with conectar() as con:
+            total_trabajadores = con.execute("SELECT COUNT(*) FROM empleados").fetchone()[0]
+            total_prendas = con.execute("SELECT COUNT(*) FROM prendas").fetchone()[0]
+        c1, c2 = st.columns(2)
+        c1.metric("Trabajadores registrados", total_trabajadores)
+        c2.metric("Referencias de prendas", total_prendas)
+    st.subheader("Accesos rápidos")
+    cols = st.columns(3)
+    accesos = [g for g in grupos_visibles if g != "🏠 Inicio"]
+    for i, g in enumerate(accesos):
+        with cols[i % 3]:
+            if st.button(g, use_container_width=True, key="inicio_" + g):
+                st.session_state["tng_grupo"] = g
+                st.rerun()
+    st.info("Solo aparecen las secciones autorizadas para tu rol.")
+
+elif opcion == "🔐 Gestión de contraseñas":
     st.title("🔐 Recuperación administrada de contraseñas")
     st.caption("Solo Relaciones Laborales puede generar una contraseña temporal. El usuario deberá cambiarla al iniciar sesión.")
     with conectar() as con:
