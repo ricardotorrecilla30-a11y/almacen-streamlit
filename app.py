@@ -290,7 +290,7 @@ def inicializar_bd():
 
     # Usuarios iniciales para demostración
     usuarios_iniciales = [
-        ("admin", "admin123", "Relaciones Laborales"),
+        ("admin", "admin123", "Administrador"),
         ("almacen", "almacen123", "Almacén")
     ]
 
@@ -302,8 +302,8 @@ def inicializar_bd():
         """, (usuario, hash_password(password), rol))
 
     # Migración de roles de instalaciones anteriores, sin borrar registros históricos.
-    cursor.execute("UPDATE usuarios SET rol = 'Relaciones Laborales' WHERE rol = 'Administrador'")
-    cursor.execute("UPDATE usuarios SET activo = 0 WHERE rol IN ('RRHH', 'Recursos Humanos')")
+    cursor.execute("UPDATE usuarios SET rol = 'Administrador' WHERE rol = 'Relaciones Laborales'")
+    cursor.execute("UPDATE usuarios SET activo = 0 WHERE rol IN ('RRHH', 'Recursos Humanos', 'Solicitante de área')")
     conexion.commit()
     conexion.close()
 
@@ -565,8 +565,8 @@ def buscar_asistente(pregunta, rol):
     con = conectar()
     try:
         if any(w in ql for w in ('matrícula','matricula','trabajador','empleado','persona','expediente','busca','encuentra')):
-            if rol != 'Relaciones Laborales':
-                return 'La búsqueda de datos personales está disponible únicamente para Relaciones Laborales.'
+            if rol != 'Administrador':
+                return 'La búsqueda de datos personales está disponible únicamente para Administrador.'
             patron = re.sub(r'(?i)\b(busca|buscar|encuentra|encontrar|la|el|matrícula|matricula|de|del|trabajador|empleado|persona|expediente|por|nombre|cuál|cual|es|quiero|ver)\b', ' ', q)
             patron = ' '.join(patron.split()).strip(' ?¿')
             if len(patron) < 2:
@@ -588,7 +588,7 @@ def buscar_asistente(pregunta, rol):
         if any(w in ql for w in ('ayuda','cómo','como','instrucciones')):
             return ("Puedo orientarte: para registrar una entrega utiliza Entregas; para una devolución, "
                     "Devoluciones; para revisar una prenda, Historial por prenda o Kardex. "
-                    "Para buscar una matrícula, escribe 'Busca' seguido del nombre (solo Relaciones Laborales).")
+                    "Para buscar una matrícula, escribe 'Busca' seguido del nombre (solo Administrador).")
         if any(w in ql for w in ('agotad','bajo stock','stock bajo','abastec')):
             filas=con.execute("""SELECT nombre,talla,existencia,minimo FROM prendas
                 WHERE activo=1 AND existencia<=minimo ORDER BY existencia,nombre LIMIT 20""").fetchall()
@@ -597,7 +597,7 @@ def buscar_asistente(pregunta, rol):
         if any(w in ql for w in ('solicitud','pendiente')):
             filas=con.execute("SELECT estado,COUNT(*) FROM solicitudes_almacen GROUP BY estado ORDER BY estado").fetchall()
             return 'Solicitudes por estado:\n'+'\n'.join(f'- {estado}: {n}' for estado,n in filas) if filas else 'No hay solicitudes registradas.'
-        return 'Puedo buscar matrículas (solo Relaciones Laborales), consultar existencias de prendas y tallas o resumir estados de solicitudes. No modifico registros desde el chat.'
+        return 'Puedo buscar matrículas (solo Administrador), consultar existencias de prendas y tallas o resumir estados de solicitudes. No modifico registros desde el chat.'
     finally:
         con.close()
 
@@ -779,13 +779,9 @@ if not st.session_state.logged_in:
                 )
 
     with st.expander("¿Olvidaste tu contraseña?"):
-        st.info("Solicita a Relaciones Laborales un restablecimiento de contraseña. Por seguridad, no se muestra si existe un usuario ni se envían contraseñas por el chatbot.")
+        st.info("Solicita a Administrador un restablecimiento de contraseña. Por seguridad, no se muestra si existe un usuario ni se envían contraseñas por el chatbot.")
 
-    st.info(
-        "Usuarios de demostración (Relaciones Laborales y Almacén): "
-        "admin / admin123, "
-        "almacen / almacen123"
-    )
+    st.caption("Solicita tus credenciales al responsable del sistema. Cambia las claves iniciales antes de publicar la aplicación.")
 
     st.stop()
 
@@ -837,55 +833,55 @@ rol = st.session_state.rol
 
 opciones = []
 
-if rol in ["Relaciones Laborales"]:
+if rol in ["Administrador"]:
     opciones.append("🔐 Gestión de contraseñas")
     opciones.append("👥 Empleados")
     opciones.extend(["🗂️ Expediente y bajas", "📏 Cambios de talla", "⚙️ Motivos de reposición", "💾 Respaldos"])
 
-if rol in ["Relaciones Laborales", "Almacén", "Solicitante de área"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("📨 Solicitudes a Almacén")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("👕 Inventario")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("🏭 Almacén")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("📦 Entregas")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("✍️ Acuses y firmas")
 
-if rol in ["Relaciones Laborales"]:
+if rol in ["Administrador"]:
     opciones.append("🔄 Reposiciones")
 
-if rol in ["Relaciones Laborales"]:
+if rol in ["Administrador"]:
     opciones.append("📋 Matriz de Dotación")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("📊 Dashboard")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("📈 Frecuencias")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("📦 Kardex")
     opciones.append("📜 Historial por prenda")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("⚠️ Alertas")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.extend(["🚦 Semáforo", "📅 Próximas dotaciones", "📉 Pronóstico", "↩️ Devoluciones"])
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("📑 Reportes")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.append("📝 Bitácora")
 
-if rol in ["Relaciones Laborales", "Almacén"]:
+if rol in ["Administrador", "Almacén"]:
     opciones.extend(["🔔 Notificaciones", "📊 Indicadores KPI", "🤖 Asistente TNG 2.0"])
 
 # Navegación compacta: conserva cada módulo y limita las opciones por rol.
@@ -928,7 +924,7 @@ if st.sidebar.button(
 if opcion == "__inicio__":
     st.title("TNG | Control y Trazabilidad de Uniformes")
     st.caption("Bienvenido. Selecciona una sección del menú o utiliza un acceso rápido.")
-    if rol in ("Relaciones Laborales", "Almacén"):
+    if rol in ("Administrador", "Almacén"):
         with conectar() as con:
             total_trabajadores = con.execute("SELECT COUNT(*) FROM empleados").fetchone()[0]
             total_prendas = con.execute("SELECT COUNT(*) FROM prendas").fetchone()[0]
@@ -947,7 +943,7 @@ if opcion == "__inicio__":
 
 elif opcion == "🔐 Gestión de contraseñas":
     st.title("🔐 Recuperación administrada de contraseñas")
-    st.caption("Solo Relaciones Laborales puede generar una contraseña temporal. El usuario deberá cambiarla al iniciar sesión.")
+    st.caption("Solo Administrador puede generar una contraseña temporal. El usuario deberá cambiarla al iniciar sesión.")
     with conectar() as con:
         cuentas=con.execute("SELECT usuario,rol FROM usuarios WHERE activo=1 ORDER BY usuario").fetchall()
     cuenta=st.selectbox("Cuenta a restablecer",[u for u,r in cuentas])
@@ -1219,13 +1215,13 @@ if opcion == "👥 Empleados":
 # ============================================================
 elif opcion == "📨 Solicitudes a Almacén":
     st.title("📨 Solicitudes de uniformes")
-    st.caption("Las áreas solicitan; Relaciones Laborales autoriza; Almacén prepara y entrega con firma. El inventario se descuenta únicamente al confirmar la entrega.")
+    st.caption("Las áreas solicitan; Administrador autoriza; Almacén prepara y entrega con firma. El inventario se descuenta únicamente al confirmar la entrega.")
     conexion = conectar()
     empleados_sol = conexion.execute("SELECT id, numero_empleado, nombre, puesto, area, COALESCE(disciplina, ''), COALESCE(tipo_trabajador, 'Sin clasificar') FROM empleados WHERE activo=1 ORDER BY nombre").fetchall()
     prendas_sol = conexion.execute("SELECT id, nombre, talla, existencia FROM prendas WHERE activo=1 ORDER BY nombre, talla").fetchall()
     conexion.close()
 
-    if rol == "Relaciones Laborales":
+    if False:  # Solo dos roles habilitados: Administrador y Almacén. Se conserva el historial de solicitudes.
         with st.expander("👤 Crear acceso para otra área"):
             with st.form("crear_usuario_area"):
                 nuevo_usuario = st.text_input("Usuario de área *").strip()
@@ -1248,7 +1244,7 @@ elif opcion == "📨 Solicitudes a Almacén":
                     finally:
                         con.close()
 
-    if rol in ("Relaciones Laborales", "Solicitante de área"):
+    if rol == "Administrador":
         st.subheader("Nueva solicitud")
         if not empleados_sol or not prendas_sol:
             st.warning("Registra primero trabajadores y prendas en sus respectivos módulos.")
@@ -1259,7 +1255,7 @@ elif opcion == "📨 Solicitudes a Almacén":
                 empleados_elegibles = empleados_sol
             emps = {f"{e[1]} - {e[2]} ({e[6]})": e for e in empleados_elegibles}
             if not emps:
-                st.info("No hay trabajadores registrados en tu área. Solicita a Relaciones Laborales actualizar el área de los empleados.")
+                st.info("No hay trabajadores registrados en tu área. Solicita a Administrador actualizar el área de los empleados.")
             prendas_sel = {f"{p[1]} | Talla {p[2]} | Existencia {p[3]}": p for p in prendas_sol}
             if emps:
               emp_key = st.selectbox("Trabajador (matrícula)", list(emps), key="solicitud_empleado_tipo")
@@ -1277,7 +1273,7 @@ elif opcion == "📨 Solicitudes a Almacén":
                       import pandas as pd
                       st.dataframe(pd.DataFrame(reglas_aplicables, columns=["Prenda", "Talla", "Cantidad autorizada", "Frecuencia", "Tipo de trabajador", "Observaciones"]), use_container_width=True, hide_index=True)
                   else:
-                      st.info("No hay reglas registradas para este puesto y tipo de trabajador. Relaciones Laborales debe revisar la matriz antes de autorizar la solicitud.")
+                      st.info("No hay reglas registradas para este puesto y tipo de trabajador. Administrador debe revisar la matriz antes de autorizar la solicitud.")
               with st.form("solicitud_rl"):
                   pre_key = st.selectbox("Prenda solicitada", list(prendas_sel))
                   cant = st.number_input("Cantidad solicitada", min_value=1, step=1, value=1)
@@ -1331,7 +1327,7 @@ elif opcion == "📨 Solicitudes a Almacén":
             st.write(f"**Avance:** {parcial_hist} de {cantidad_sol} unidades | **Pendiente:** {max(0,cantidad_sol-parcial_hist)}")
             if historial:
                 st.dataframe([{'Acuse / entrega':h[0],'Cantidad':h[1],'Fecha':h[2],'Responsable':h[3]} for h in historial],hide_index=True,use_container_width=True)
-            if rol == "Relaciones Laborales" and estado_sol == "Por autorizar":
+            if rol == "Administrador" and estado_sol == "Por autorizar":
                 st.caption("Para autorizar se requiere firma manuscrita del responsable. El rechazo no requiere firma.")
                 firma_aut_canvas = None
                 if st_canvas is not None:
@@ -1341,7 +1337,7 @@ elif opcion == "📨 Solicitudes a Almacén":
                 else:
                     st.warning("Para autorizar instala streamlit-drawable-canvas y numpy.")
                 with st.form(f"autorizacion_area_{sid}"):
-                    comentario_rl = st.text_area("Comentario de Relaciones Laborales")
+                    comentario_rl = st.text_area("Comentario de Administrador")
                     ca, cr = st.columns(2)
                     autorizar_area = ca.form_submit_button("✅ Autorizar y enviar a Almacén")
                     rechazar_area = cr.form_submit_button("❌ Rechazar solicitud")
