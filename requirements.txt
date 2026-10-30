@@ -1,9 +1,6 @@
-streamlit
-pandas
-bcrypt
-libsql
-streamlit-drawable-canvas
-pillow
-reportlab
-plotly
-openpyxl
+streamlit>=1.35
+pandas>=2.0
+openpyxl>=3.1
+reportlab>=4.0
+streamlit-drawable-canvas>=0.9.3
+pillow>=10.0
