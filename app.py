@@ -36,6 +36,27 @@ st.set_page_config(
     layout="wide"
 )
 
+# Identidad visual compacta basada en el diseño aprobado para TNG.
+st.markdown("""
+<style>
+:root { --tng-navy: #092849; --tng-blue: #0878ee; --tng-pale: #f3f8ff; }
+[data-testid="stAppViewContainer"] { background: #f4f8fd; }
+[data-testid="stHeader"] { background: rgba(244,248,253,.92); }
+[data-testid="stSidebar"] { background: var(--tng-navy); }
+[data-testid="stSidebar"] * { color: #f4f8ff; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label { padding: .45rem .55rem; border-radius: .45rem; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover { background: #123d68; }
+[data-testid="stSidebar"] hr { border-color: #ffffff30; }
+.stButton > button, [data-testid="stFormSubmitButton"] button { background: var(--tng-blue); color: white; border: 0; border-radius: 8px; font-weight: 600; }
+.stButton > button:hover, [data-testid="stFormSubmitButton"] button:hover { background: #0566cf; color: white; border: 0; }
+[data-testid="stMetric"] { background: white; border: 1px solid #dce7f4; padding: 1rem; border-radius: 12px; box-shadow: 0 3px 12px #102b4808; }
+[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 12px; }
+[data-testid="stDataFrame"], [data-testid="stTable"] { border: 1px solid #dce7f4; border-radius: 10px; }
+h1, h2, h3 { color: #102b4e; }
+@media (max-width: 700px) { section.main > div { padding-left: .7rem; padding-right: .7rem; } }
+</style>
+""", unsafe_allow_html=True)
+
 DB_NAME = os.environ.get("TNG_DB_PATH", str(Path(__file__).resolve().parent / "tng_uniformes.db"))
 
 
@@ -288,22 +309,8 @@ def inicializar_bd():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_movimientos_prenda_fecha ON movimientos(prenda_id,fecha)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_solicitudes_estado ON solicitudes_almacen(estado)")
 
-    # Usuarios iniciales para demostración
-    usuarios_iniciales = [
-        ("admin", "admin123", "Administrador"),
-        ("almacen", "almacen123", "Almacén")
-    ]
-
-    for usuario, password, rol in usuarios_iniciales:
-        cursor.execute("""
-            INSERT OR IGNORE INTO usuarios
-            (usuario, password, rol)
-            VALUES (?, ?, ?)
-        """, (usuario, hash_password(password), rol))
-
-    # Migración de roles de instalaciones anteriores, sin borrar registros históricos.
-    cursor.execute("UPDATE usuarios SET rol = 'Administrador' WHERE rol = 'Relaciones Laborales'")
-    cursor.execute("UPDATE usuarios SET activo = 0 WHERE rol IN ('RRHH', 'Recursos Humanos', 'Solicitante de área')")
+    # No crear cuentas con contraseñas públicas. Las cuentas existentes se conservan.
+    # Aprovisionar usuarios mediante procedimiento administrativo seguro.
     conexion.commit()
     conexion.close()
 
@@ -884,30 +891,24 @@ if rol in ["Administrador", "Almacén"]:
 if rol in ["Administrador", "Almacén"]:
     opciones.extend(["🔔 Notificaciones", "📊 Indicadores KPI", "🤖 Asistente TNG 2.0"])
 
-# Navegación compacta: conserva cada módulo y limita las opciones por rol.
+# Cinco secciones principales. Los submódulos se muestran dentro de la página.
 GRUPOS_MENU = {
     "🏠 Inicio": [],
-    "👥 Trabajadores": ["👥 Empleados", "🗂️ Expediente y bajas", "📏 Cambios de talla", "📋 Matriz de Dotación"],
-    "📦 Inventario": ["👕 Inventario", "🏭 Almacén", "📦 Kardex", "📜 Historial por prenda", "🚦 Semáforo", "⚠️ Alertas", "📉 Pronóstico"],
-    "🚚 Entregas": ["📦 Entregas", "✍️ Acuses y firmas", "🔄 Reposiciones", "↩️ Devoluciones", "📅 Próximas dotaciones"],
-    "📨 Solicitudes": ["📨 Solicitudes a Almacén", "⚙️ Motivos de reposición"],
-    "📊 Reportes": ["📊 Dashboard", "📊 Indicadores KPI", "📈 Frecuencias", "📑 Reportes", "📝 Bitácora"],
-    "🔔 Avisos": ["🔔 Notificaciones"],
-    "🤖 Asistente TNG": ["🤖 Asistente TNG 2.0"],
-    "⚙️ Configuración": ["🔐 Gestión de contraseñas", "💾 Respaldos"],
+    "👥 Trabajadores": ["👥 Empleados", "🗂️ Expediente y bajas", "📏 Cambios de talla", "📋 Matriz de Dotación", "📅 Próximas dotaciones"],
+    "📦 Inventario": ["👕 Inventario", "🏭 Almacén", "📦 Kardex", "📜 Historial por prenda", "🚦 Semáforo", "⚠️ Alertas", "📉 Pronóstico", "↩️ Devoluciones"],
+    "🚚 Dotaciones": ["📨 Solicitudes a Almacén", "📦 Entregas", "✍️ Acuses y firmas", "🔄 Reposiciones", "⚙️ Motivos de reposición"],
+    "⚙️ Administración": ["📊 Dashboard", "📊 Indicadores KPI", "📈 Frecuencias", "📑 Reportes", "📝 Bitácora", "🔔 Notificaciones", "🔐 Gestión de contraseñas", "💾 Respaldos", "🤖 Asistente TNG 2.0"],
 }
 grupos_visibles = ["🏠 Inicio"] + [
-    grupo for grupo, modulos in GRUPOS_MENU.items()
-    if grupo != "🏠 Inicio" and any(modulo in opciones for modulo in modulos)
+    g for g, modulos in GRUPOS_MENU.items()
+    if g != "🏠 Inicio" and any(m in opciones for m in modulos)
 ]
 st.sidebar.markdown("### TNG")
-st.sidebar.caption("Control y Trazabilidad de Uniformes")
-# Aplicar navegación solicitada ANTES de instanciar el widget del menú.
+st.sidebar.caption("Control y trazabilidad de uniformes")
 if "tng_grupo_destino" in st.session_state:
     destino = st.session_state.pop("tng_grupo_destino")
     if destino in grupos_visibles:
         st.session_state["tng_grupo"] = destino
-# Si cambian los permisos del usuario, descartar selecciones ya no disponibles.
 if st.session_state.get("tng_grupo") not in grupos_visibles:
     st.session_state["tng_grupo"] = "🏠 Inicio"
 grupo = st.sidebar.radio("Menú principal", grupos_visibles, key="tng_grupo")
@@ -915,7 +916,14 @@ if grupo == "🏠 Inicio":
     opcion = "__inicio__"
 else:
     disponibles = [m for m in GRUPOS_MENU[grupo] if m in opciones]
-    opcion = st.sidebar.radio("Opciones", disponibles, key="tng_modulo_" + grupo)
+    st.subheader(grupo)
+    # Selector compacto en lugar de una fila larga de pestañas.
+    modulo_previo = st.session_state.get("tng_modulo_sel_" + grupo)
+    indice_previo = disponibles.index(modulo_previo) if modulo_previo in disponibles else 0
+    opcion = st.selectbox(
+        "¿Qué necesitas hacer?", disponibles, index=indice_previo,
+        key="tng_modulo_sel_" + grupo
+    )
 st.sidebar.divider()
 
 if st.sidebar.button(
@@ -1005,7 +1013,7 @@ elif opcion == "📜 Historial por prenda":
             file_name=f"historial_prenda_{pid}.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else: st.info("No hay prendas registradas.")
 
-if opcion == "👥 Empleados":
+elif opcion == "👥 Empleados":
 
     st.title("👥 Gestión de Empleados")
 
