@@ -902,6 +902,14 @@ grupos_visibles = ["🏠 Inicio"] + [
 ]
 st.sidebar.markdown("### TNG")
 st.sidebar.caption("Control y Trazabilidad de Uniformes")
+# Aplicar navegación solicitada ANTES de instanciar el widget del menú.
+if "tng_grupo_destino" in st.session_state:
+    destino = st.session_state.pop("tng_grupo_destino")
+    if destino in grupos_visibles:
+        st.session_state["tng_grupo"] = destino
+# Si cambian los permisos del usuario, descartar selecciones ya no disponibles.
+if st.session_state.get("tng_grupo") not in grupos_visibles:
+    st.session_state["tng_grupo"] = "🏠 Inicio"
 grupo = st.sidebar.radio("Menú principal", grupos_visibles, key="tng_grupo")
 if grupo == "🏠 Inicio":
     opcion = "__inicio__"
@@ -937,7 +945,7 @@ if opcion == "__inicio__":
     for i, g in enumerate(accesos):
         with cols[i % 3]:
             if st.button(g, use_container_width=True, key="inicio_" + g):
-                st.session_state["tng_grupo"] = g
+                st.session_state["tng_grupo_destino"] = g
                 st.rerun()
     st.info("Solo aparecen las secciones autorizadas para tu rol.")
 
