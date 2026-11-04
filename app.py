@@ -1514,9 +1514,10 @@ elif opcion == "👕 Inventario":
 
     st.title("👕 Control de Inventario")
 
-    pestaña1, pestaña2 = st.tabs([
+    pestaña1, pestaña2, pestaña3 = st.tabs([
         "➕ Registrar prenda",
-        "📦 Existencias"
+        "📦 Existencias",
+        "📋 Inventario base TNG"
     ])
 
     with pestaña1:
@@ -1703,6 +1704,138 @@ elif opcion == "👕 Inventario":
         else:
 
             st.info("No hay prendas registradas.")
+
+
+    with pestaña3:
+        st.subheader("📋 Inventario base TNG")
+        st.caption(
+            "Catálogo inicial transcrito de las dos imágenes proporcionadas. "
+            "El semáforo usa verde (20 o más), amarillo (10 a 19) y rojo (menos de 10)."
+        )
+
+        inventario_base_tng = [
+            # Camisolas
+            ("CAMISOLA", "28", 18), ("CAMISOLA", "30", 37),
+            ("CAMISOLA", "32", 29), ("CAMISOLA", "34", 37),
+            ("CAMISOLA", "36", 40), ("CAMISOLA", "38", 20),
+            ("CAMISOLA", "40", 15), ("CAMISOLA", "42", 8),
+            ("CAMISOLA", "44", 17), ("CAMISOLA", "46", 5),
+            ("CAMISOLA", "48", 7), ("CAMISOLA", "50", 1),
+            ("CAMISOLA", "52", 3),
+            # Pantalones
+            ("PANTALÓN", "28", 21), ("PANTALÓN", "30", 9),
+            ("PANTALÓN", "32", 14), ("PANTALÓN", "34", 9),
+            ("PANTALÓN", "36", 24), ("PANTALÓN", "38", 43),
+            ("PANTALÓN", "40", 8), ("PANTALÓN", "42", 42),
+            ("PANTALÓN", "44", 19), ("PANTALÓN", "46", 13),
+            ("PANTALÓN", "48", 5), ("PANTALÓN", "50", 3),
+            ("PANTALÓN", "52", 3),
+            # Botas MR
+            ("BOTAS MR", "22", 10), ("BOTAS MR", "23", 17),
+            ("BOTAS MR", "24", 17), ("BOTAS MR", "25", 45),
+            ("BOTAS MR", "26", 71), ("BOTAS MR", "27", 46),
+            ("BOTAS MR", "28", 54), ("BOTAS MR", "29", 33),
+            ("BOTAS MR", "30", 8), ("BOTAS MR", "31", 15),
+            # Botas DURAMAX
+            ("BOTAS DURAMAX", "22", 0), ("BOTAS DURAMAX", "23", 6),
+            ("BOTAS DURAMAX", "24", 5), ("BOTAS DURAMAX", "25", 16),
+            ("BOTAS DURAMAX", "26", 10), ("BOTAS DURAMAX", "27", 5),
+            ("BOTAS DURAMAX", "28", 4), ("BOTAS DURAMAX", "29", 13),
+            ("BOTAS DURAMAX", "30", 1), ("BOTAS DURAMAX", "31", 7),
+            # Botas petroleras
+            ("BOTAS PETROLERAS", "22", 0), ("BOTAS PETROLERAS", "23", 1),
+            ("BOTAS PETROLERAS", "24", 0), ("BOTAS PETROLERAS", "25", 5),
+            ("BOTAS PETROLERAS", "26", 2), ("BOTAS PETROLERAS", "27", 0),
+            ("BOTAS PETROLERAS", "28", 6), ("BOTAS PETROLERAS", "29", 8),
+            ("BOTAS PETROLERAS", "30", 1), ("BOTAS PETROLERAS", "31", 0),
+        ]
+
+        import pandas as pd
+
+        df_base = pd.DataFrame(
+            inventario_base_tng,
+            columns=["Artículo", "Talla", "Stock actual"]
+        )
+        df_base["Estado"] = df_base["Stock actual"].apply(
+            lambda n: "🟢 Suficiente" if n >= 20 else (
+                "🟡 Bajo" if n >= 10 else "🔴 Crítico"
+            )
+        )
+
+        def colorear_stock(valor):
+            if valor >= 20:
+                return "background-color: #16a34a; color: white; font-weight: 700"
+            if valor >= 10:
+                return "background-color: #facc15; color: #172b3a; font-weight: 700"
+            return "background-color: #dc2626; color: white; font-weight: 700"
+
+        st.dataframe(
+            df_base.style.map(colorear_stock, subset=["Stock actual"]),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        total_unidades_base = int(df_base["Stock actual"].sum())
+        criticos_base = int((df_base["Stock actual"] < 10).sum())
+        bajos_base = int(df_base["Stock actual"].between(10, 19).sum())
+        suficientes_base = int((df_base["Stock actual"] >= 20).sum())
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Referencias", len(df_base))
+        k2.metric("Unidades en base", total_unidades_base)
+        k3.metric("Stock bajo", bajos_base)
+        k4.metric("Stock crítico", criticos_base)
+
+        st.info(
+            "La carga agrega las referencias que no existan todavía. "
+            "Si una prenda y talla ya están registradas, su existencia actual "
+            "no se sobrescribe."
+        )
+        confirmar_carga_base = st.checkbox(
+            "Confirmo que deseo agregar al inventario las referencias de esta base.",
+            key="confirmar_carga_inventario_base"
+        )
+        if st.button(
+            "📥 Agregar inventario base a TNG",
+            type="primary",
+            use_container_width=True,
+            disabled=not confirmar_carga_base,
+            key="btn_cargar_inventario_base_tng"
+        ):
+            agregadas = 0
+            existentes = 0
+            conexion = conectar()
+            cursor = conexion.cursor()
+            try:
+                for articulo, talla_base, stock_base in inventario_base_tng:
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO prendas
+                            (nombre, tipo, talla, existencia, minimo, activo)
+                        VALUES (?, 'Uniforme', ?, ?, 10, 1)
+                        """,
+                        (articulo, talla_base, stock_base)
+                    )
+                    if cursor.rowcount == 1:
+                        agregadas += 1
+                    else:
+                        existentes += 1
+                conexion.commit()
+            except Exception as error:
+                conexion.rollback()
+                st.error(f"No se pudo cargar el inventario base: {error}")
+            else:
+                registrar_bitacora(
+                    "Inventario",
+                    "Carga de inventario base",
+                    f"Referencias agregadas: {agregadas}; ya existentes: {existentes}"
+                )
+                st.success(
+                    f"Carga terminada. Se agregaron {agregadas} referencias; "
+                    f"{existentes} ya existían y se conservaron sin cambios."
+                )
+                st.rerun()
+            finally:
+                conexion.close()
 
 
 # ============================================================
