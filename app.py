@@ -36,6 +36,37 @@ st.set_page_config(
     layout="wide"
 )
 
+st.markdown("""
+<style>
+:root { --tng-navy:#102b46; --tng-blue:#176b9a; --tng-cyan:#36a6c9; --tng-ink:#172b3a; --tng-muted:#647789; }
+.stApp { background: linear-gradient(180deg, #f4f8fb 0%, #edf3f8 100%); color: var(--tng-ink); }
+[data-testid="stHeader"] { background: rgba(244,248,251,.88); }
+.block-container { padding-top: 1.7rem; padding-bottom: 2.5rem; max-width: 1500px; }
+[data-testid="stSidebar"] { background: linear-gradient(180deg,#102b46 0%,#173f5d 100%); }
+[data-testid="stSidebar"] * { color: #f4f8fb !important; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label { background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.10); border-radius: 10px; padding: .42rem .65rem; margin: .18rem 0; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover { background: rgba(54,166,201,.22); }
+h1, h2, h3 { color: #102b46; letter-spacing: -.025em; }
+h1 { font-weight: 800; }
+[data-testid="stMetric"] { background: #ffffff; border: 1px solid #dce7ef; border-radius: 15px; padding: 16px 18px; box-shadow: 0 5px 18px rgba(16,43,70,.055); }
+[data-testid="stMetricLabel"] { color: #587084; font-weight: 650; }
+[data-testid="stMetricValue"] { color: #102b46; font-weight: 800; }
+.stButton > button, [data-testid="stFormSubmitButton"] button { border-radius: 10px; border: 1px solid #c8d8e4; font-weight: 650; min-height: 2.65rem; transition: all .15s ease; }
+.stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] button[kind="primary"] { background: linear-gradient(90deg,#145b85,#218db4); border: 0; color: white; }
+.stButton > button:hover { border-color: #218db4; color: #145b85; box-shadow: 0 4px 12px rgba(16,80,120,.12); }
+[data-testid="stDataFrame"], [data-testid="stTable"] { border: 1px solid #dce7ef; border-radius: 12px; overflow: hidden; }
+[data-testid="stExpander"] { border: 1px solid #dce7ef; border-radius: 12px; background: rgba(255,255,255,.75); }
+[data-testid="stAlert"] { border-radius: 12px; }
+hr { border-color: #dce7ef; }
+.tng-hero { background: linear-gradient(115deg,#102b46 0%,#15577e 62%,#218db4 100%); border-radius: 20px; padding: 25px 28px; color: white; margin: 0 0 22px 0; box-shadow: 0 12px 28px rgba(16,43,70,.16); }
+.tng-hero h1 { color: white !important; font-size: 1.85rem; margin: 0 0 5px 0; }
+.tng-hero p { color: #e2f1f8 !important; margin: 0; font-size: 1rem; }
+.tng-kicker { color: #a9dff0; font-size: .75rem; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; margin-bottom: 8px; }
+.tng-section { color:#102b46; font-size:1.05rem; font-weight:750; margin: 1.15rem 0 .6rem 0; }
+@media (max-width: 700px) { .block-container { padding-left: 1rem; padding-right: 1rem; } .tng-hero { padding: 19px; } }
+</style>
+""", unsafe_allow_html=True)
+
 DB_NAME = os.environ.get("TNG_DB_PATH", str(Path(__file__).resolve().parent / "tng_uniformes.db"))
 
 
@@ -716,13 +747,14 @@ if "ultimo_acuse" not in st.session_state:
 
 if not st.session_state.logged_in:
 
-    st.title("🏢 TNG")
-    st.subheader("Sistema de Control de Uniformes")
-
-    st.write(
-        "Control de empleados, inventario, entregas, "
-        "reposiciones y trazabilidad."
-    )
+    st.markdown("""
+    <section class="tng-hero">
+      <div class="tng-kicker">HUTCHISON PORTS · TNG</div>
+      <h1>Control y Trazabilidad de Uniformes</h1>
+      <p>Plataforma de gestión para dotaciones, inventario y seguimiento de entregas.</p>
+    </section>
+    """, unsafe_allow_html=True)
+    st.subheader("Acceso al sistema")
 
     st.divider()
 
@@ -2613,10 +2645,15 @@ elif opcion == "📈 Frecuencias":
 # ============================================================
 elif opcion == "📊 Dashboard":
 
-    st.title("📊 Dashboard TNG")
-    st.write(
-        "Indicadores de control de dotaciones e inventario."
-    )
+    st.markdown("""
+    <section class="tng-hero">
+      <div class="tng-kicker">TNG · PANEL EJECUTIVO</div>
+      <h1>Control y trazabilidad de uniformes</h1>
+      <p>Visibilidad operativa de trabajadores, existencias, entregas y reposiciones.</p>
+    </section>
+    """, unsafe_allow_html=True)
+    st.subheader("Resumen de operación")
+    st.caption("Indicadores consolidados del sistema. La información se obtiene de los registros actuales.")
 
     conexion = conectar()
     cursor = conexion.cursor()
