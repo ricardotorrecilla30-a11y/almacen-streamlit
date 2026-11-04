@@ -1769,8 +1769,35 @@ elif opcion == "👕 Inventario":
                 return "background-color: #facc15; color: #172b3a; font-weight: 700"
             return "background-color: #dc2626; color: white; font-weight: 700"
 
+        estilo_inventario_base = (
+            df_base.style
+            .map(colorear_stock, subset=["Stock actual"])
+            .set_table_styles([
+                {
+                    "selector": "th",
+                    "props": [
+                        ("background-color", "#17365D"),
+                        ("color", "#FFFFFF"),
+                        ("font-weight", "bold"),
+                        ("text-align", "center"),
+                        ("border", "1px solid #FFFFFF"),
+                        ("font-size", "14px"),
+                    ],
+                },
+                {
+                    "selector": "th.col_heading",
+                    "props": [
+                        ("background-color", "#17365D"),
+                        ("color", "#FFFFFF"),
+                        ("font-weight", "bold"),
+                    ],
+                },
+            ])
+            .set_properties(**{"text-align": "center"}, subset=["Talla", "Stock actual", "Estado"])
+        )
+
         st.dataframe(
-            df_base.style.map(colorear_stock, subset=["Stock actual"]),
+            estilo_inventario_base,
             use_container_width=True,
             hide_index=True
         )
