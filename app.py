@@ -63,6 +63,40 @@ hr { border-color: #dce7ef; }
 .tng-hero p { color: #e2f1f8 !important; margin: 0; font-size: 1rem; }
 .tng-kicker { color: #a9dff0; font-size: .75rem; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; margin-bottom: 8px; }
 .tng-section { color:#102b46; font-size:1.05rem; font-weight:750; margin: 1.15rem 0 .6rem 0; }
+/* Contraste global: etiquetas de formularios, pestañas y campos */
+.stApp [data-testid="stWidgetLabel"] p,
+.stApp [data-testid="stWidgetLabel"] label,
+.stApp .stSelectbox label,
+.stApp .stTextInput label,
+.stApp .stNumberInput label,
+.stApp .stDateInput label,
+.stApp .stTextArea label,
+.stApp .stRadio label,
+.stApp .stCheckbox label,
+.stApp [data-testid="stForm"] label {
+    color: #17324a !important;
+    font-weight: 750 !important;
+    opacity: 1 !important;
+}
+.stApp [data-baseweb="input"] input,
+.stApp [data-baseweb="select"] *,
+.stApp [data-testid="stDateInput"] input,
+.stApp textarea {
+    color: #172b3a !important;
+}
+.stApp [data-testid="stTabs"] button,
+.stApp [data-testid="stTabs"] button p {
+    color: #17324a !important;
+    font-weight: 700 !important;
+    opacity: 1 !important;
+}
+.stApp [data-testid="stDataFrame"] thead th,
+.stApp [data-testid="stTable"] thead th {
+    background: #17365D !important;
+    color: #FFFFFF !important;
+    font-weight: 800 !important;
+    text-align: center !important;
+}
 @media (max-width: 700px) { .block-container { padding-left: 1rem; padding-right: 1rem; } .tng-hero { padding: 19px; } }
 </style>
 """, unsafe_allow_html=True)
@@ -1748,6 +1782,13 @@ elif opcion == "👕 Inventario":
             ("BOTAS PETROLERAS", "26", 2), ("BOTAS PETROLERAS", "27", 0),
             ("BOTAS PETROLERAS", "28", 6), ("BOTAS PETROLERAS", "29", 8),
             ("BOTAS PETROLERAS", "30", 1), ("BOTAS PETROLERAS", "31", 0),
+            # Overol rojo (nueva fotografía)
+            ("OVEROL ROJO", "28", 14), ("OVEROL ROJO", "30", 15),
+            ("OVEROL ROJO", "32", 18), ("OVEROL ROJO", "34", 20),
+            ("OVEROL ROJO", "36", 18), ("OVEROL ROJO", "38", 16),
+            ("OVEROL ROJO", "40", 19), ("OVEROL ROJO", "42", 20),
+            ("OVEROL ROJO", "44", 10), ("OVEROL ROJO", "46", 4),
+            ("OVEROL ROJO", "48", 3), ("OVEROL ROJO", "50", 4),
         ]
 
         import pandas as pd
@@ -1782,6 +1823,7 @@ elif opcion == "👕 Inventario":
                         ("text-align", "center"),
                         ("border", "1px solid #FFFFFF"),
                         ("font-size", "14px"),
+                        ("padding", "9px 12px"),
                     ],
                 },
                 {
