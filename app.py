@@ -63,39 +63,19 @@ hr { border-color: #dce7ef; }
 .tng-hero p { color: #e2f1f8 !important; margin: 0; font-size: 1rem; }
 .tng-kicker { color: #a9dff0; font-size: .75rem; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; margin-bottom: 8px; }
 .tng-section { color:#102b46; font-size:1.05rem; font-weight:750; margin: 1.15rem 0 .6rem 0; }
-/* Contraste reforzado: títulos, etiquetas y encabezados visibles en fondo claro */
-.stApp [data-testid="stWidgetLabel"],
-.stApp [data-testid="stWidgetLabel"] *,
+/* Contraste global: etiquetas de formularios, pestañas y campos */
 .stApp [data-testid="stWidgetLabel"] p,
 .stApp [data-testid="stWidgetLabel"] label,
-.stApp [data-testid="stWidgetLabel"] span,
-.stApp [data-testid="stWidgetLabel"] div,
-.stApp [data-testid="stForm"] label,
-.stApp [data-testid="stForm"] label *,
-.stApp .stSelectbox label, .stApp .stSelectbox label *,
-.stApp .stTextInput label, .stApp .stTextInput label *,
-.stApp .stNumberInput label, .stApp .stNumberInput label *,
-.stApp .stDateInput label, .stApp .stDateInput label *,
-.stApp .stTextArea label, .stApp .stTextArea label *,
-.stApp .stRadio label, .stApp .stRadio label *,
-.stApp .stCheckbox label, .stApp .stCheckbox label *,
-.stApp [data-testid="stFileUploader"] label,
-.stApp [data-testid="stFileUploader"] label * {
-    color: #102b46 !important;
-    font-weight: 800 !important;
-    opacity: 1 !important;
-    text-shadow: none !important;
-}
-.stApp [data-testid="stMarkdownContainer"] label,
-.stApp [data-testid="stMarkdownContainer"] label * {
-    color: #102b46 !important;
-    font-weight: 800 !important;
-}
-.stApp h1, .stApp h2, .stApp h3, .stApp h4,
-.stApp [data-testid="stSubheader"] *,
-.stApp [data-testid="stHeader"] * {
-    color: #102b46 !important;
-    font-weight: 800 !important;
+.stApp .stSelectbox label,
+.stApp .stTextInput label,
+.stApp .stNumberInput label,
+.stApp .stDateInput label,
+.stApp .stTextArea label,
+.stApp .stRadio label,
+.stApp .stCheckbox label,
+.stApp [data-testid="stForm"] label {
+    color: #17324a !important;
+    font-weight: 750 !important;
     opacity: 1 !important;
 }
 .stApp [data-baseweb="input"] input,
@@ -1858,9 +1838,11 @@ elif opcion == "👕 Inventario":
             .set_properties(**{"text-align": "center"}, subset=["Talla", "Stock actual", "Estado"])
         )
 
-        # st.table respeta los estilos CSS del encabezado de pandas Styler;
-        # st.dataframe dibuja el encabezado en un canvas y puede ignorar esos estilos.
-        st.table(estilo_inventario_base)
+        st.dataframe(
+            estilo_inventario_base,
+            use_container_width=True,
+            hide_index=True
+        )
 
         total_unidades_base = int(df_base["Stock actual"].sum())
         criticos_base = int((df_base["Stock actual"] < 10).sum())
