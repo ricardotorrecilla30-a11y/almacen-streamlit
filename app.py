@@ -63,19 +63,39 @@ hr { border-color: #dce7ef; }
 .tng-hero p { color: #e2f1f8 !important; margin: 0; font-size: 1rem; }
 .tng-kicker { color: #a9dff0; font-size: .75rem; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; margin-bottom: 8px; }
 .tng-section { color:#102b46; font-size:1.05rem; font-weight:750; margin: 1.15rem 0 .6rem 0; }
-/* Contraste global: etiquetas de formularios, pestañas y campos */
+/* Contraste reforzado: títulos, etiquetas y encabezados visibles en fondo claro */
+.stApp [data-testid="stWidgetLabel"],
+.stApp [data-testid="stWidgetLabel"] *,
 .stApp [data-testid="stWidgetLabel"] p,
 .stApp [data-testid="stWidgetLabel"] label,
-.stApp .stSelectbox label,
-.stApp .stTextInput label,
-.stApp .stNumberInput label,
-.stApp .stDateInput label,
-.stApp .stTextArea label,
-.stApp .stRadio label,
-.stApp .stCheckbox label,
-.stApp [data-testid="stForm"] label {
-    color: #17324a !important;
-    font-weight: 750 !important;
+.stApp [data-testid="stWidgetLabel"] span,
+.stApp [data-testid="stWidgetLabel"] div,
+.stApp [data-testid="stForm"] label,
+.stApp [data-testid="stForm"] label *,
+.stApp .stSelectbox label, .stApp .stSelectbox label *,
+.stApp .stTextInput label, .stApp .stTextInput label *,
+.stApp .stNumberInput label, .stApp .stNumberInput label *,
+.stApp .stDateInput label, .stApp .stDateInput label *,
+.stApp .stTextArea label, .stApp .stTextArea label *,
+.stApp .stRadio label, .stApp .stRadio label *,
+.stApp .stCheckbox label, .stApp .stCheckbox label *,
+.stApp [data-testid="stFileUploader"] label,
+.stApp [data-testid="stFileUploader"] label * {
+    color: #102b46 !important;
+    font-weight: 800 !important;
+    opacity: 1 !important;
+    text-shadow: none !important;
+}
+.stApp [data-testid="stMarkdownContainer"] label,
+.stApp [data-testid="stMarkdownContainer"] label * {
+    color: #102b46 !important;
+    font-weight: 800 !important;
+}
+.stApp h1, .stApp h2, .stApp h3, .stApp h4,
+.stApp [data-testid="stSubheader"] *,
+.stApp [data-testid="stHeader"] * {
+    color: #102b46 !important;
+    font-weight: 800 !important;
     opacity: 1 !important;
 }
 .stApp [data-baseweb="input"] input,
@@ -97,6 +117,36 @@ hr { border-color: #dce7ef; }
     font-weight: 800 !important;
     text-align: center !important;
 }
+/* TNG 2026 — contraste accesible y jerarquía visual */
+.stApp [data-testid="stWidgetLabel"] p,
+.stApp [data-testid="stWidgetLabel"] span,
+.stApp [data-testid="stWidgetLabel"] label {
+    color: #102b46 !important; font-weight: 800 !important; opacity: 1 !important;
+}
+.stApp [data-testid="stTabs"] button p {color:#17365d !important;font-weight:800 !important;}
+.stApp [data-testid="stTabs"] button[aria-selected="true"] p {color:#0b6d9a !important;}
+.stApp [data-testid="stTextInput"] input,
+.stApp [data-testid="stNumberInput"] input,
+.stApp [data-testid="stDateInput"] input,
+.stApp [data-testid="stTextArea"] textarea {
+    background-color:#fff !important;color:#102b46 !important;
+    border:1px solid #a8bfce !important;border-radius:9px !important;
+}
+.stApp [data-baseweb="select"] > div {background:#fff !important;border:1px solid #a8bfce !important;}
+.stApp [data-baseweb="select"] [role="combobox"] {color:#102b46 !important;}
+.stApp [data-testid="stForm"] {background:rgba(255,255,255,.80);border:1px solid #d5e3ed;border-radius:16px;padding:20px;}
+.stApp [data-testid="stButton"] button {background:#fff;color:#102b46;border:1px solid #c6d9e6;}
+.stApp [data-testid="stButton"] button:hover {background:#e7f4fb;color:#0b547c;}
+.stApp [data-testid="stButton"] button[kind="primary"] {background:#12648e !important;color:#fff !important;}
+.stApp [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+.stApp [data-testid="stSidebar"] [data-testid="stWidgetLabel"] span,
+.stApp [data-testid="stSidebar"] [data-testid="stRadio"] p {color:#fff !important;}
+.tng-eyebrow {font-size:.78rem;letter-spacing:.16em;text-transform:uppercase;color:#0f7aa5;font-weight:800;}
+.tng-hero-new {background:linear-gradient(120deg,#0d2844,#135981 68%,#1d8fb2);color:#fff;padding:32px 34px;border-radius:20px;margin:0 0 22px;box-shadow:0 12px 26px rgba(10,44,70,.14);}
+.tng-hero-new h1 {color:#fff !important;font-size:2.1rem;margin:.3rem 0 .5rem;font-weight:850;}
+.tng-hero-new p {color:#d9f2ff !important;font-size:1rem;margin:0;}
+.tng-hero-new .tng-eyebrow {color:#a5e2f5;}
+.tng-section-head {font-size:1.2rem;font-weight:800;color:#102b46;margin:22px 0 10px;}
 @media (max-width: 700px) { .block-container { padding-left: 1rem; padding-right: 1rem; } .tng-hero { padding: 19px; } }
 </style>
 """, unsafe_allow_html=True)
@@ -996,24 +1046,76 @@ if st.sidebar.button(
 # ============================================================
 
 if opcion == "__inicio__":
-    st.title("TNG | Control y Trazabilidad de Uniformes")
-    st.caption("Bienvenido. Selecciona una sección del menú o utiliza un acceso rápido.")
-    if rol in ("Administrador", "Almacén"):
-        with conectar() as con:
-            total_trabajadores = con.execute("SELECT COUNT(*) FROM empleados").fetchone()[0]
-            total_prendas = con.execute("SELECT COUNT(*) FROM prendas").fetchone()[0]
-        c1, c2 = st.columns(2)
-        c1.metric("Trabajadores registrados", total_trabajadores)
-        c2.metric("Referencias de prendas", total_prendas)
-    st.subheader("Accesos rápidos")
-    cols = st.columns(3)
-    accesos = [g for g in grupos_visibles if g != "🏠 Inicio"]
-    for i, g in enumerate(accesos):
-        with cols[i % 3]:
-            if st.button(g, use_container_width=True, key="inicio_" + g):
+    st.markdown(
+        '<section class="tng-hero-new">'
+        '<div class="tng-eyebrow">HUTCHISON PORTS TNG · CONTROL OPERATIVO</div>'
+        '<h1>Centro de control de uniformes</h1>'
+        '<p>Inventario, dotaciones, entregas y seguimiento en un solo lugar.</p>'
+        '</section>', unsafe_allow_html=True
+    )
+    # Indicadores en vivo: nunca se sustituyen por cifras de ejemplo.
+    with conectar() as con:
+        total_trabajadores = con.execute(
+            "SELECT COUNT(*) FROM empleados WHERE activo=1"
+        ).fetchone()[0]
+        resumen_stock = con.execute("""
+            SELECT COUNT(*), COALESCE(SUM(existencia),0),
+                   COALESCE(SUM(CASE WHEN existencia <= minimo THEN 1 ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN existencia=0 THEN 1 ELSE 0 END),0)
+            FROM prendas WHERE activo=1
+        """).fetchone()
+        top_prendas = con.execute("""
+            SELECT nombre, SUM(existencia) AS total
+            FROM prendas WHERE activo=1 GROUP BY nombre
+            ORDER BY total DESC LIMIT 8
+        """).fetchall()
+        alertas_home = con.execute("""
+            SELECT nombre, talla, existencia, minimo
+            FROM prendas WHERE activo=1 AND existencia <= minimo
+            ORDER BY existencia ASC, nombre, talla LIMIT 12
+        """).fetchall()
+
+    st.markdown('<div class="tng-section-head">Resumen en tiempo real</div>', unsafe_allow_html=True)
+    m1,m2,m3,m4,m5 = st.columns(5)
+    m1.metric("Trabajadores activos", total_trabajadores)
+    m2.metric("Referencias", resumen_stock[0])
+    m3.metric("Unidades disponibles", resumen_stock[1])
+    m4.metric("Bajo mínimo", resumen_stock[2])
+    m5.metric("Sin existencias", resumen_stock[3])
+    st.caption("Indicadores calculados con los datos registrados en la base de datos actual.")
+
+    st.markdown('<div class="tng-section-head">Accesos rápidos</div>', unsafe_allow_html=True)
+    prioritarios = ["👥 Trabajadores", "📦 Inventario", "🚚 Entregas", "📨 Solicitudes", "📊 Reportes"]
+    accesos = [g for g in prioritarios if g in grupos_visibles]
+    cols = st.columns(len(accesos)) if accesos else []
+    for i,g in enumerate(accesos):
+        with cols[i]:
+            if st.button(g, use_container_width=True, key="inicio_"+g):
+                # El estado se aplica ANTES de crear el radio en el siguiente rerun.
                 st.session_state["tng_grupo_destino"] = g
                 st.rerun()
-    st.info("Solo aparecen las secciones autorizadas para tu rol.")
+
+    grafico, alertas = st.columns([1.2,1],gap="large")
+    with grafico:
+        st.markdown('<div class="tng-section-head">Existencias por artículo</div>', unsafe_allow_html=True)
+        if top_prendas:
+            import pandas as pd
+            graf = pd.DataFrame(top_prendas,columns=["Artículo","Unidades"])
+            st.bar_chart(graf.set_index("Artículo"),color="#187ca8",height=310)
+        else:
+            st.info("Registra prendas para visualizar las existencias por artículo.")
+    with alertas:
+        st.markdown('<div class="tng-section-head">Alertas de abastecimiento</div>', unsafe_allow_html=True)
+        if alertas_home:
+            import pandas as pd
+            st.dataframe(
+                pd.DataFrame(alertas_home,columns=["Artículo","Talla","Stock","Mínimo"]),
+                use_container_width=True,hide_index=True,height=310
+            )
+            st.caption("Se muestran hasta 12 referencias con existencias iguales o inferiores al mínimo registrado.")
+        else:
+            st.success("No hay referencias bajo su mínimo registrado.")
+    st.info("Selecciona un acceso rápido o utiliza el menú lateral para trabajar en cada módulo.")
 
 elif opcion == "🔐 Gestión de contraseñas":
     st.title("🔐 Recuperación administrada de contraseñas")
@@ -1838,11 +1940,9 @@ elif opcion == "👕 Inventario":
             .set_properties(**{"text-align": "center"}, subset=["Talla", "Stock actual", "Estado"])
         )
 
-        st.dataframe(
-            estilo_inventario_base,
-            use_container_width=True,
-            hide_index=True
-        )
+        # st.table respeta los estilos CSS del encabezado de pandas Styler;
+        # st.dataframe dibuja el encabezado en un canvas y puede ignorar esos estilos.
+        st.table(estilo_inventario_base)
 
         total_unidades_base = int(df_base["Stock actual"].sum())
         criticos_base = int((df_base["Stock actual"] < 10).sum())
