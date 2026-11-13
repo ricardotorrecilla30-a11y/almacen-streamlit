@@ -1205,126 +1205,102 @@ if opcion == "__inicio__":
 
 elif opcion == "🔐 Gestión de contraseñas":
     st.title("👥 Administración de usuarios")
-    st.caption("Solo el Administrador puede crear, restablecer o desactivar cuentas.")
-    if st.session_state.rol != "Administrador":
-        st.error("No tienes permisos para administrar usuarios.")
+    if rol != "Administrador":
+        st.error("Solo el Administrador puede gestionar usuarios.")
         st.stop()
 
-    tab_crear, tab_cuentas, tab_restablecer, tab_clave = st.tabs([
-        "➕ Nuevo usuario", "👥 Usuarios registrados",
-        "🔑 Restablecer contraseña", "🔒 Mi contraseña"
+    tab_alta, tab_lista, tab_claves = st.tabs([
+        "➕ Nuevo usuario", "👥 Usuarios registrados", "🔐 Contraseñas"
     ])
-
-    with tab_crear:
-        st.subheader("Registrar nueva cuenta")
-        with st.form("tng_alta_usuario", clear_on_submit=True):
-            nuevo_usuario = st.text_input("Nombre de usuario", max_chars=40,
-                                          placeholder="Ejemplo: almacen_turno2")
-            nuevo_rol = st.selectbox("Rol", ["Almacén", "Administrador"])
-            nueva_clave = st.text_input("Contraseña", type="password")
-            repetir_clave = st.text_input("Confirmar contraseña", type="password")
-            guardar_usuario = st.form_submit_button("➕ Crear usuario", use_container_width=True)
-        if guardar_usuario:
-            nombre_limpio = nuevo_usuario.strip().lower()
-            if not re.fullmatch(r"[a-z0-9_.-]{4,40}", nombre_limpio):
-                st.error("Usa de 4 a 40 caracteres: letras sin espacios, números, _, . o -.")
-            elif len(nueva_clave) < 12:
+    with tab_alta:
+        st.subheader("Crear una cuenta nueva")
+        with st.form("form_alta_usuario_tng", clear_on_submit=True):
+            usuario_nuevo = st.text_input("Nombre de usuario", max_chars=40)
+            rol_nuevo = st.selectbox("Rol de la cuenta", ["Almacén", "Administrador"])
+            clave_nueva = st.text_input("Contraseña inicial", type="password")
+            clave_confirmada = st.text_input("Confirmar contraseña", type="password")
+            alta = st.form_submit_button("Crear usuario", use_container_width=True)
+        if alta:
+            usuario_limpio = usuario_nuevo.strip().lower()
+            if not re.fullmatch(r"[a-z0-9_.-]{4,40}", usuario_limpio):
+                st.error("El usuario debe tener entre 4 y 40 caracteres: letras, números, _, . o -.")
+            elif len(clave_nueva) < 12:
                 st.error("La contraseña debe tener al menos 12 caracteres.")
-            elif nueva_clave != repetir_clave:
+            elif clave_nueva != clave_confirmada:
                 st.error("Las contraseñas no coinciden.")
             else:
                 try:
                     with conectar() as con:
-                        con.execute("INSERT INTO usuarios (usuario,password,rol,activo) VALUES (?,?,?,1)",
-                                    (nombre_limpio, hash_password(nueva_clave), nuevo_rol))
-                    registrar_bitacora("Usuarios", "Alta de usuario",
-                                       f"Cuenta: {nombre_limpio}; rol: {nuevo_rol}")
-                    st.success(f"Usuario «{nombre_limpio}» creado correctamente con rol {nuevo_rol}.")
+                        con.execute(
+                            "INSERT INTO usuarios (usuario,password,rol,activo) VALUES (?,?,?,1)",
+                            (usuario_limpio, hash_password(clave_nueva), rol_nuevo)
+                        )
+                    registrar_bitacora("Usuarios", "Alta de cuenta", f"Usuario: {usuario_limpio}; rol: {rol_nuevo}")
+                    st.success(f"Cuenta {usuario_limpio} creada correctamente.")
                 except sqlite3.IntegrityError:
                     st.error("Ese nombre de usuario ya está registrado.")
-                except sqlite3.Error as exc:
-                    st.error(f"No se pudo crear el usuario: {exc}")
+                except sqlite3.Error as error:
+                    st.error(f"No se pudo registrar la cuenta: {error}")
 
-    with tab_cuentas:
+    with tab_lista:
         st.subheader("Cuentas registradas")
         with conectar() as con:
-            filas_usuarios = con.execute(
-                "SELECT usuario, rol, activo FROM usuarios ORDER BY usuario"
+            usuarios_lista = con.execute(
+                "SELECT usuario,rol,activo FROM usuarios ORDER BY usuario"
             ).fetchall()
         import pandas as pd
         st.dataframe(pd.DataFrame(
-            [(u, r, "Activa" if a else "Inactiva") for u, r, a in filas_usuarios],
-            columns=["Usuario", "Rol", "Estado"]),
-            hide_index=True, use_container_width=True)
-        otros = [(u,r,a) for u,r,a in filas_usuarios if u != st.session_state.usuario]
-        if otros:
-            cuentas_mapa = {f"{u} · {r} · {'Activa' if a else 'Inactiva'}": (u,a)
-                           for u,r,a in otros}
-            seleccion = st.selectbox("Cuenta que deseas modificar", list(cuentas_mapa))
-            usuario_obj, activo_obj = cuentas_mapa[seleccion]
-            accion = "Desactivar" if activo_obj else "Activar"
-            confirmacion_estado = st.checkbox(f"Confirmo que deseo {accion.lower()} esta cuenta",
-                                               key="confirmar_estado_usuario")
-            if st.button(f"{accion} cuenta", disabled=not confirmacion_estado,
-                         key="cambiar_estado_usuario"):
+            [(u,r,"Activa" if a else "Inactiva") for u,r,a in usuarios_lista],
+            columns=["Usuario", "Rol", "Estado"]
+        ), hide_index=True, use_container_width=True)
+        modificables = [(u,a) for u,r,a in usuarios_lista if u != st.session_state.usuario]
+        if modificables:
+            seleccion = st.selectbox("Cuenta a activar o desactivar", [u for u,a in modificables])
+            estado = next(a for u,a in modificables if u == seleccion)
+            accion = "Desactivar" if estado else "Activar"
+            confirma = st.checkbox(f"Confirmo que deseo {accion.lower()} la cuenta seleccionada")
+            if st.button(accion + " cuenta", disabled=not confirma):
                 with conectar() as con:
-                    con.execute("UPDATE usuarios SET activo=? WHERE usuario=?",
-                                (0 if activo_obj else 1, usuario_obj))
-                registrar_bitacora("Usuarios", f"{accion} cuenta", f"Cuenta: {usuario_obj}")
-                st.success(f"Cuenta {usuario_obj}: {accion.lower()} realizada.")
+                    con.execute("UPDATE usuarios SET activo=? WHERE usuario=?", (0 if estado else 1, seleccion))
+                registrar_bitacora("Usuarios", accion + " cuenta", seleccion)
                 st.rerun()
-        else:
-            st.info("No hay otras cuentas para modificar.")
 
-    with tab_restablecer:
-        st.subheader("Restablecer acceso")
-        st.caption("Verifica la identidad de la persona antes de generar una nueva contraseña.")
+    with tab_claves:
+        st.title("🔐 Recuperación administrada de contraseñas")
+        st.caption("Solo Administrador puede generar una contraseña temporal. El usuario deberá cambiarla al iniciar sesión.")
         with conectar() as con:
-            cuentas = con.execute(
-                "SELECT usuario FROM usuarios WHERE activo=1 ORDER BY usuario"
-            ).fetchall()
-        if cuentas:
-            cuenta = st.selectbox("Cuenta a restablecer", [u[0] for u in cuentas])
-            confirmacion = st.checkbox(
-                "He verificado la identidad de la persona por el procedimiento interno")
-            if st.button("Generar contraseña temporal", disabled=not confirmacion):
-                temporal = secrets.token_urlsafe(16)
-                with conectar() as con:
-                    con.execute("UPDATE usuarios SET password=? WHERE usuario=? AND activo=1",
-                                (hash_password(temporal), cuenta))
-                    con.execute(
-                        "INSERT INTO restablecimientos_clave(usuario,fecha,autorizado_por) VALUES (?,?,?)",
-                        (cuenta, ahora(), st.session_state.usuario))
-                registrar_bitacora("Usuarios", "Restablecimiento de clave",
-                                   f"Cuenta: {cuenta}")
-                st.warning("Entrega esta contraseña de forma privada. Se muestra una sola vez.")
-                st.code(temporal)
-        else:
-            st.info("No hay cuentas activas.")
-
-    with tab_clave:
+            cuentas=con.execute("SELECT usuario,rol FROM usuarios WHERE activo=1 ORDER BY usuario").fetchall()
+        cuenta=st.selectbox("Cuenta a restablecer",[u for u,r in cuentas])
+        confirmacion=st.checkbox("He verificado la identidad de la persona por un procedimiento interno")
+        if st.button("Generar contraseña temporal",disabled=not confirmacion):
+            temporal=secrets.token_urlsafe(12)
+            with conectar() as con:
+                con.execute("BEGIN IMMEDIATE")
+                con.execute("UPDATE usuarios SET password=? WHERE usuario=? AND activo=1",(hash_password(temporal),cuenta))
+                con.execute("INSERT INTO restablecimientos_clave(usuario,fecha,autorizado_por) VALUES (?,?,?)",
+                            (cuenta,ahora(),st.session_state.usuario))
+            registrar_bitacora("Usuarios","Restablecimiento de clave",f"Cuenta: {cuenta}")
+            st.warning("Copia la contraseña temporal ahora; no se guardará en texto legible.")
+            st.code(temporal)
+        st.divider()
         st.subheader("Cambiar mi contraseña")
         with st.form("cambiar_clave_propia"):
-            actual = st.text_input("Contraseña actual", type="password")
-            nueva = st.text_input("Nueva contraseña (mínimo 12 caracteres)", type="password")
-            confirmar = st.text_input("Repite la nueva contraseña", type="password")
-            cambiar = st.form_submit_button("Actualizar contraseña")
+            actual=st.text_input("Contraseña actual",type="password")
+            nueva=st.text_input("Nueva contraseña (mínimo 12 caracteres)",type="password")
+            confirmar=st.text_input("Repite la nueva contraseña",type="password")
+            cambiar=st.form_submit_button("Actualizar contraseña")
         if cambiar:
             with conectar() as con:
-                row = con.execute(
-                    "SELECT password FROM usuarios WHERE usuario=?",
-                    (st.session_state.usuario,)).fetchone()
-                if not row or not hmac.compare_digest(row[0], hash_password(actual)):
+                row=con.execute("SELECT password FROM usuarios WHERE usuario=?",(st.session_state.usuario,)).fetchone()
+                if not row or not hmac.compare_digest(row[0],hash_password(actual)):
                     st.error("La contraseña actual no coincide.")
-                elif len(nueva) < 12 or nueva != confirmar:
+                elif len(nueva)<12 or nueva!=confirmar:
                     st.error("La nueva contraseña debe tener al menos 12 caracteres y coincidir.")
                 else:
-                    con.execute("UPDATE usuarios SET password=? WHERE usuario=?",
-                                (hash_password(nueva), st.session_state.usuario))
-                    con.execute("UPDATE restablecimientos_clave SET debe_cambiar=0 WHERE usuario=?",
-                                (st.session_state.usuario,))
+                    con.execute("UPDATE usuarios SET password=? WHERE usuario=?",(hash_password(nueva),st.session_state.usuario))
+                    con.execute("UPDATE restablecimientos_clave SET debe_cambiar=0 WHERE usuario=?",(st.session_state.usuario,))
                     st.success("Contraseña actualizada.")
-                    registrar_bitacora("Usuarios", "Cambio de contraseña", "Cuenta propia")
+                    registrar_bitacora("Usuarios","Cambio de contraseña","Cuenta propia")
 
 elif opcion == "📜 Historial por prenda":
     st.title("📜 Historial de movimientos por prenda")
@@ -1349,7 +1325,7 @@ if opcion == "👥 Empleados":
 
     st.title("👥 Gestión de Empleados")
 
-    pestaña1, pestaña2, pestaña3 = st.tabs([
+    pestaña1, pestaña2, pestaña3, pestaña4 = st.tabs([
         "➕ Registrar empleado",
         "📋 Consultar empleados",
         "🏷️ Clasificar trabajadores existentes"
@@ -1825,7 +1801,8 @@ elif opcion == "👕 Inventario":
     pestaña1, pestaña2, pestaña3 = st.tabs([
         "➕ Registrar prenda",
         "📦 Existencias",
-        "📋 Inventario base TNG"
+        "📋 Inventario base TNG",
+        "🆕 Stock uniformes nuevos"
     ])
 
     with pestaña1:
@@ -2186,6 +2163,74 @@ elif opcion == "👕 Inventario":
                 st.rerun()
             finally:
                 conexion.close()
+
+
+    with pestaña4:
+        st.subheader("🆕 Stock de uniformes nuevos")
+        st.caption("Datos transcritos del archivo STOCK UNIFORMES NUEVOS.xlsx. Las cantidades en cero se conservan como cero.")
+        import pandas as pd
+        stock_nuevo = [('CAMISOLA BEIGE', '28', 15), ('CAMISOLA BEIGE', '30', 85), ('CAMISOLA BEIGE', '32', 72), ('CAMISOLA BEIGE', '34', 68), ('CAMISOLA BEIGE', '36', 0), ('CAMISOLA BEIGE', '38', 0), ('CAMISOLA BEIGE', '40', 34), ('CAMISOLA BEIGE', '42', 39), ('CAMISOLA BEIGE', '44', 52), ('CAMISOLA BEIGE', '46', 23), ('CAMISOLA BEIGE', '48', 29), ('CAMISOLA BEIGE', '50', 12), ('CAMISOLA BEIGE', '52', 20), ('PANTALON BEIGE', '28', 4), ('PANTALON BEIGE', '30', 2), ('PANTALON BEIGE', '32', 28), ('PANTALON BEIGE', '34', 75), ('PANTALON BEIGE', '36', 35), ('PANTALON BEIGE', '38', 41), ('PANTALON BEIGE', '40', 69), ('PANTALON BEIGE', '42', 42), ('PANTALON BEIGE', '44', 50), ('PANTALON BEIGE', '46', 35), ('PANTALON BEIGE', '48', 64), ('PANTALON BEIGE', '50', 4), ('PANTALON BEIGE', '52', 0), ('CAMISOLA AZUL', '28', 25), ('CAMISOLA AZUL', '30', 37), ('CAMISOLA AZUL', '32', 33), ('CAMISOLA AZUL', '34', 41), ('CAMISOLA AZUL', '36', 34), ('CAMISOLA AZUL', '38', 45), ('CAMISOLA AZUL', '40', 42), ('CAMISOLA AZUL', '42', 43), ('CAMISOLA AZUL', '44', 28), ('CAMISOLA AZUL', '46', 21), ('CAMISOLA AZUL', '48', 25), ('CAMISOLA AZUL', '50', 25), ('PANTALON AZUL', '28', 38), ('PANTALON AZUL', '30', 33), ('PANTALON AZUL', '32', 48), ('PANTALON AZUL', '34', 35), ('PANTALON AZUL', '36', 55), ('PANTALON AZUL', '38', 53), ('PANTALON AZUL', '40', 50), ('PANTALON AZUL', '42', 52), ('PANTALON AZUL', '44', 26), ('PANTALON AZUL', '46', 10), ('PANTALON AZUL', '48', 7), ('PANTALON AZUL', '50', 0), ('OVERALL', '28', 11), ('OVERALL', '30', 13), ('OVERALL', '32', 9), ('OVERALL', '34', 18), ('OVERALL', '36', 17), ('OVERALL', '38', 15), ('OVERALL', '40', 18), ('OVERALL', '42', 20), ('OVERALL', '44', 10), ('OVERALL', '46', 4), ('OVERALL', '48', 4), ('OVERALL', '50', 0), ('BOTAS MR', '22', 10), ('BOTAS MR', '23', 14), ('BOTAS MR', '24', 13), ('BOTAS MR', '25', 41), ('BOTAS MR', '26', 49), ('BOTAS MR', '27', 23), ('BOTAS MR', '28', 31), ('BOTAS MR', '29', 27), ('BOTAS MR', '30', 4), ('BOTAS MR', '31', 13)]
+        df_nuevo = pd.DataFrame(stock_nuevo, columns=["Artículo", "Talla", "Stock en Excel"])
+        st.dataframe(df_nuevo, hide_index=True, use_container_width=True, height=340)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Artículos", df_nuevo["Artículo"].nunique())
+        c2.metric("Referencias", len(df_nuevo))
+        c3.metric("Unidades del archivo", int(df_nuevo["Stock en Excel"].sum()))
+        st.download_button("⬇️ Descargar stock nuevo (CSV)",
+                           df_nuevo.to_csv(index=False).encode("utf-8-sig"),
+                           file_name="TNG_stock_uniformes_nuevos.csv", mime="text/csv",
+                           key="descarga_stock_nuevo")
+        with conectar() as con:
+            existentes_nuevos = {(nombre, talla): existencia for nombre,talla,existencia in
+                                 con.execute("SELECT nombre,talla,existencia FROM prendas").fetchall()}
+        diferencias = [(n,t,q,existentes_nuevos[(n,t)]) for n,t,q in stock_nuevo
+                       if (n,t) in existentes_nuevos and existentes_nuevos[(n,t)] != q]
+        nuevos = sum((n,t) not in existentes_nuevos for n,t,q in stock_nuevo)
+        st.info(f"Se agregarían {nuevos} referencias nuevas. Hay {len(diferencias)} referencias existentes con cantidades distintas.")
+        modo_stock = st.radio("¿Cómo deseas integrar el archivo?", [
+            "Agregar únicamente referencias nuevas (recomendado)",
+            "Sincronizar también las cantidades de referencias existentes"
+        ], key="modo_stock_nuevo")
+        if modo_stock.startswith("Sincronizar"):
+            st.warning("Sincronizar cambia el stock registrado, pero NO genera movimientos de entrada/salida. "
+                       "Úsalo solo si el Excel representa un conteo físico validado.")
+            if diferencias:
+                st.dataframe(pd.DataFrame(diferencias,
+                    columns=["Artículo", "Talla", "Stock en Excel", "Stock actual en app"]),
+                    hide_index=True, use_container_width=True)
+        confirmar_stock = st.checkbox("He revisado las cantidades y autorizo la carga de este archivo.",
+                                      key="confirmar_stock_nuevo")
+        if st.button("📥 Aplicar stock nuevo", type="primary", use_container_width=True,
+                     disabled=not confirmar_stock, key="aplicar_stock_nuevo"):
+            agregados = actualizados = conservados = 0
+            con = conectar()
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                for nombre, talla, cantidad in stock_nuevo:
+                    actual = con.execute("SELECT id, existencia FROM prendas WHERE nombre=? AND talla=?",
+                                         (nombre, talla)).fetchone()
+                    if actual is None:
+                        con.execute("INSERT INTO prendas (nombre,tipo,talla,existencia,minimo,activo) "
+                                    "VALUES (?, 'Uniforme', ?, ?, 10, 1)",
+                                    (nombre,talla,cantidad))
+                        agregados += 1
+                    elif modo_stock.startswith("Sincronizar") and actual[1] != cantidad:
+                        con.execute("UPDATE prendas SET existencia=? WHERE id=?", (cantidad,actual[0]))
+                        actualizados += 1
+                    else:
+                        conservados += 1
+                con.commit()
+            except Exception as error:
+                con.rollback()
+                st.error(f"No se aplicó la carga: {error}")
+            else:
+                registrar_bitacora("Inventario", "Carga stock uniformes nuevos",
+                    f"Agregados: {agregados}; actualizados: {actualizados}; conservados: {conservados}")
+                st.success(f"Carga terminada: {agregados} agregados, {actualizados} actualizados, "
+                           f"{conservados} conservados.")
+                st.rerun()
+            finally:
+                con.close()
 
 
 # ============================================================
