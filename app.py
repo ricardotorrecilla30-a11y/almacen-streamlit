@@ -148,6 +148,29 @@ hr { border-color: #dce7ef; }
 .tng-hero-new .tng-eyebrow {color:#a5e2f5;}
 .tng-section-head {font-size:1.2rem;font-weight:800;color:#102b46;margin:22px 0 10px;}
 @media (max-width: 700px) { .block-container { padding-left: 1rem; padding-right: 1rem; } .tng-hero { padding: 19px; } }
+
+/* TNG PRO: legibilidad y contraste reforzados */
+.stApp [data-testid="stTable"] table thead th,
+.stApp [data-testid="stTable"] table thead th *,
+.stApp table[data-testid="stTable"] thead th,
+.stApp [data-testid="stTable"] thead tr th {
+    background-color: #102b46 !important;
+    color: #ffffff !important;
+    font-weight: 900 !important;
+    opacity: 1 !important;
+    text-align: center !important;
+}
+.stApp [data-testid="stTable"] table tbody td {
+    color: #102b46 !important;
+    font-weight: 600 !important;
+}
+.stApp [data-testid="stMetricLabel"] p {
+    color: #29465c !important;
+    font-weight: 800 !important;
+}
+.tng-pro-note {background:#e8f3f9;border-left:4px solid #16749e;
+  padding:12px 16px;border-radius:8px;color:#15384f;font-weight:600;}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -1115,7 +1138,70 @@ if opcion == "__inicio__":
             st.caption("Se muestran hasta 12 referencias con existencias iguales o inferiores al mínimo registrado.")
         else:
             st.success("No hay referencias bajo su mínimo registrado.")
-    st.info("Selecciona un acceso rápido o utiliza el menú lateral para trabajar en cada módulo.")
+    # Inteligencia operativa: consulta únicamente la base de datos existente.
+    st.markdown('<div class="tng-section-head">Prioridades para abastecimiento</div>',
+                unsafe_allow_html=True)
+    with conectar() as con:
+        pendientes_reposicion = con.execute("""
+            SELECT nombre, talla, existencia, minimo,
+                   MAX(minimo - existencia, 0) AS faltante
+            FROM prendas
+            WHERE activo = 1 AND existencia < minimo
+            ORDER BY faltante DESC, existencia ASC, nombre
+        """).fetchall()
+        ultimas_entregas = con.execute("""
+            SELECT e.fecha, p.nombre, p.talla, e.cantidad
+            FROM entregas e
+            JOIN prendas p ON p.id = e.prenda_id
+            ORDER BY e.fecha DESC, e.id DESC LIMIT 8
+        """).fetchall()
+    prioridades, movimientos = st.columns([1.2, 1], gap="large")
+    with prioridades:
+        st.markdown("**Referencias que necesitan revisión**")
+        if pendientes_reposicion:
+            import pandas as pd
+            df_pend = pd.DataFrame(
+                pendientes_reposicion,
+                columns=["Artículo", "Talla", "Existencia", "Mínimo", "Faltante"]
+            )
+            filtro = st.text_input("Buscar artículo o talla", key="home_filtro_abasto",
+                                   placeholder="Ejemplo: OVEROL ROJO o 42")
+            if filtro.strip():
+                mask = (df_pend["Artículo"].astype(str).str.contains(
+                    filtro.strip(), case=False, regex=False)
+                    | df_pend["Talla"].astype(str).str.contains(
+                        filtro.strip(), case=False, regex=False))
+                df_pend = df_pend.loc[mask]
+            st.dataframe(df_pend, hide_index=True, use_container_width=True, height=250)
+            st.download_button(
+                "⬇️ Exportar necesidades de abastecimiento (CSV)",
+                data=df_pend.to_csv(index=False).encode("utf-8-sig"),
+                file_name="TNG_necesidades_abastecimiento.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="home_descarga_abasto",
+            )
+            st.caption("Faltante = mínimo registrado − existencia actual. "
+                       "Es una referencia de planeación, no una orden de compra.")
+        else:
+            st.success("No hay prendas por debajo de su mínimo registrado.")
+    with movimientos:
+        st.markdown("**Últimas entregas registradas**")
+        if ultimas_entregas:
+            import pandas as pd
+            st.dataframe(
+                pd.DataFrame(ultimas_entregas,
+                             columns=["Fecha", "Artículo", "Talla", "Cantidad"]),
+                use_container_width=True, hide_index=True, height=250
+            )
+        else:
+            st.info("Todavía no hay entregas registradas.")
+
+    st.markdown(
+        '<div class="tng-pro-note">Datos en tiempo real de la base actual. '
+        'Revisa las alertas antes de registrar nuevas dotaciones.</div>',
+        unsafe_allow_html=True
+    )
 
 elif opcion == "🔐 Gestión de contraseñas":
     st.title("🔐 Recuperación administrada de contraseñas")
@@ -1943,6 +2029,15 @@ elif opcion == "👕 Inventario":
         # st.table respeta los estilos CSS del encabezado de pandas Styler;
         # st.dataframe dibuja el encabezado en un canvas y puede ignorar esos estilos.
         st.table(estilo_inventario_base)
+
+        st.download_button(
+            "⬇️ Descargar catálogo base en CSV",
+            data=df_base.to_csv(index=False).encode("utf-8-sig"),
+            file_name="TNG_catalogo_base_uniformes.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="descargar_catalogo_base",
+        )
 
         total_unidades_base = int(df_base["Stock actual"].sum())
         criticos_base = int((df_base["Stock actual"] < 10).sum())
