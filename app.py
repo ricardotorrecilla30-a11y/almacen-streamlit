@@ -1204,41 +1204,127 @@ if opcion == "__inicio__":
     )
 
 elif opcion == "🔐 Gestión de contraseñas":
-    st.title("🔐 Recuperación administrada de contraseñas")
-    st.caption("Solo Administrador puede generar una contraseña temporal. El usuario deberá cambiarla al iniciar sesión.")
-    with conectar() as con:
-        cuentas=con.execute("SELECT usuario,rol FROM usuarios WHERE activo=1 ORDER BY usuario").fetchall()
-    cuenta=st.selectbox("Cuenta a restablecer",[u for u,r in cuentas])
-    confirmacion=st.checkbox("He verificado la identidad de la persona por un procedimiento interno")
-    if st.button("Generar contraseña temporal",disabled=not confirmacion):
-        temporal=secrets.token_urlsafe(12)
-        with conectar() as con:
-            con.execute("BEGIN IMMEDIATE")
-            con.execute("UPDATE usuarios SET password=? WHERE usuario=? AND activo=1",(hash_password(temporal),cuenta))
-            con.execute("INSERT INTO restablecimientos_clave(usuario,fecha,autorizado_por) VALUES (?,?,?)",
-                        (cuenta,ahora(),st.session_state.usuario))
-        registrar_bitacora("Usuarios","Restablecimiento de clave",f"Cuenta: {cuenta}")
-        st.warning("Copia la contraseña temporal ahora; no se guardará en texto legible.")
-        st.code(temporal)
-    st.divider()
-    st.subheader("Cambiar mi contraseña")
-    with st.form("cambiar_clave_propia"):
-        actual=st.text_input("Contraseña actual",type="password")
-        nueva=st.text_input("Nueva contraseña (mínimo 12 caracteres)",type="password")
-        confirmar=st.text_input("Repite la nueva contraseña",type="password")
-        cambiar=st.form_submit_button("Actualizar contraseña")
-    if cambiar:
-        with conectar() as con:
-            row=con.execute("SELECT password FROM usuarios WHERE usuario=?",(st.session_state.usuario,)).fetchone()
-            if not row or not hmac.compare_digest(row[0],hash_password(actual)):
-                st.error("La contraseña actual no coincide.")
-            elif len(nueva)<12 or nueva!=confirmar:
-                st.error("La nueva contraseña debe tener al menos 12 caracteres y coincidir.")
+    st.title("👥 Administración de usuarios")
+    st.caption("Solo el Administrador puede crear, restablecer o desactivar cuentas.")
+    if st.session_state.rol != "Administrador":
+        st.error("No tienes permisos para administrar usuarios.")
+        st.stop()
+
+    tab_crear, tab_cuentas, tab_restablecer, tab_clave = st.tabs([
+        "➕ Nuevo usuario", "👥 Usuarios registrados",
+        "🔑 Restablecer contraseña", "🔒 Mi contraseña"
+    ])
+
+    with tab_crear:
+        st.subheader("Registrar nueva cuenta")
+        with st.form("tng_alta_usuario", clear_on_submit=True):
+            nuevo_usuario = st.text_input("Nombre de usuario", max_chars=40,
+                                          placeholder="Ejemplo: almacen_turno2")
+            nuevo_rol = st.selectbox("Rol", ["Almacén", "Administrador"])
+            nueva_clave = st.text_input("Contraseña", type="password")
+            repetir_clave = st.text_input("Confirmar contraseña", type="password")
+            guardar_usuario = st.form_submit_button("➕ Crear usuario", use_container_width=True)
+        if guardar_usuario:
+            nombre_limpio = nuevo_usuario.strip().lower()
+            if not re.fullmatch(r"[a-z0-9_.-]{4,40}", nombre_limpio):
+                st.error("Usa de 4 a 40 caracteres: letras sin espacios, números, _, . o -.")
+            elif len(nueva_clave) < 12:
+                st.error("La contraseña debe tener al menos 12 caracteres.")
+            elif nueva_clave != repetir_clave:
+                st.error("Las contraseñas no coinciden.")
             else:
-                con.execute("UPDATE usuarios SET password=? WHERE usuario=?",(hash_password(nueva),st.session_state.usuario))
-                con.execute("UPDATE restablecimientos_clave SET debe_cambiar=0 WHERE usuario=?",(st.session_state.usuario,))
-                st.success("Contraseña actualizada.")
-                registrar_bitacora("Usuarios","Cambio de contraseña","Cuenta propia")
+                try:
+                    with conectar() as con:
+                        con.execute("INSERT INTO usuarios (usuario,password,rol,activo) VALUES (?,?,?,1)",
+                                    (nombre_limpio, hash_password(nueva_clave), nuevo_rol))
+                    registrar_bitacora("Usuarios", "Alta de usuario",
+                                       f"Cuenta: {nombre_limpio}; rol: {nuevo_rol}")
+                    st.success(f"Usuario «{nombre_limpio}» creado correctamente con rol {nuevo_rol}.")
+                except sqlite3.IntegrityError:
+                    st.error("Ese nombre de usuario ya está registrado.")
+                except sqlite3.Error as exc:
+                    st.error(f"No se pudo crear el usuario: {exc}")
+
+    with tab_cuentas:
+        st.subheader("Cuentas registradas")
+        with conectar() as con:
+            filas_usuarios = con.execute(
+                "SELECT usuario, rol, activo FROM usuarios ORDER BY usuario"
+            ).fetchall()
+        import pandas as pd
+        st.dataframe(pd.DataFrame(
+            [(u, r, "Activa" if a else "Inactiva") for u, r, a in filas_usuarios],
+            columns=["Usuario", "Rol", "Estado"]),
+            hide_index=True, use_container_width=True)
+        otros = [(u,r,a) for u,r,a in filas_usuarios if u != st.session_state.usuario]
+        if otros:
+            cuentas_mapa = {f"{u} · {r} · {'Activa' if a else 'Inactiva'}": (u,a)
+                           for u,r,a in otros}
+            seleccion = st.selectbox("Cuenta que deseas modificar", list(cuentas_mapa))
+            usuario_obj, activo_obj = cuentas_mapa[seleccion]
+            accion = "Desactivar" if activo_obj else "Activar"
+            confirmacion_estado = st.checkbox(f"Confirmo que deseo {accion.lower()} esta cuenta",
+                                               key="confirmar_estado_usuario")
+            if st.button(f"{accion} cuenta", disabled=not confirmacion_estado,
+                         key="cambiar_estado_usuario"):
+                with conectar() as con:
+                    con.execute("UPDATE usuarios SET activo=? WHERE usuario=?",
+                                (0 if activo_obj else 1, usuario_obj))
+                registrar_bitacora("Usuarios", f"{accion} cuenta", f"Cuenta: {usuario_obj}")
+                st.success(f"Cuenta {usuario_obj}: {accion.lower()} realizada.")
+                st.rerun()
+        else:
+            st.info("No hay otras cuentas para modificar.")
+
+    with tab_restablecer:
+        st.subheader("Restablecer acceso")
+        st.caption("Verifica la identidad de la persona antes de generar una nueva contraseña.")
+        with conectar() as con:
+            cuentas = con.execute(
+                "SELECT usuario FROM usuarios WHERE activo=1 ORDER BY usuario"
+            ).fetchall()
+        if cuentas:
+            cuenta = st.selectbox("Cuenta a restablecer", [u[0] for u in cuentas])
+            confirmacion = st.checkbox(
+                "He verificado la identidad de la persona por el procedimiento interno")
+            if st.button("Generar contraseña temporal", disabled=not confirmacion):
+                temporal = secrets.token_urlsafe(16)
+                with conectar() as con:
+                    con.execute("UPDATE usuarios SET password=? WHERE usuario=? AND activo=1",
+                                (hash_password(temporal), cuenta))
+                    con.execute(
+                        "INSERT INTO restablecimientos_clave(usuario,fecha,autorizado_por) VALUES (?,?,?)",
+                        (cuenta, ahora(), st.session_state.usuario))
+                registrar_bitacora("Usuarios", "Restablecimiento de clave",
+                                   f"Cuenta: {cuenta}")
+                st.warning("Entrega esta contraseña de forma privada. Se muestra una sola vez.")
+                st.code(temporal)
+        else:
+            st.info("No hay cuentas activas.")
+
+    with tab_clave:
+        st.subheader("Cambiar mi contraseña")
+        with st.form("cambiar_clave_propia"):
+            actual = st.text_input("Contraseña actual", type="password")
+            nueva = st.text_input("Nueva contraseña (mínimo 12 caracteres)", type="password")
+            confirmar = st.text_input("Repite la nueva contraseña", type="password")
+            cambiar = st.form_submit_button("Actualizar contraseña")
+        if cambiar:
+            with conectar() as con:
+                row = con.execute(
+                    "SELECT password FROM usuarios WHERE usuario=?",
+                    (st.session_state.usuario,)).fetchone()
+                if not row or not hmac.compare_digest(row[0], hash_password(actual)):
+                    st.error("La contraseña actual no coincide.")
+                elif len(nueva) < 12 or nueva != confirmar:
+                    st.error("La nueva contraseña debe tener al menos 12 caracteres y coincidir.")
+                else:
+                    con.execute("UPDATE usuarios SET password=? WHERE usuario=?",
+                                (hash_password(nueva), st.session_state.usuario))
+                    con.execute("UPDATE restablecimientos_clave SET debe_cambiar=0 WHERE usuario=?",
+                                (st.session_state.usuario,))
+                    st.success("Contraseña actualizada.")
+                    registrar_bitacora("Usuarios", "Cambio de contraseña", "Cuenta propia")
 
 elif opcion == "📜 Historial por prenda":
     st.title("📜 Historial de movimientos por prenda")
