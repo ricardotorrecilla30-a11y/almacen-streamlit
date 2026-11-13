@@ -1798,7 +1798,7 @@ elif opcion == "👕 Inventario":
 
     st.title("👕 Control de Inventario")
 
-    pestaña1, pestaña2, pestaña3 = st.tabs([
+    pestaña1, pestaña2, pestaña3, pestaña4 = st.tabs([
         "➕ Registrar prenda",
         "📦 Existencias",
         "📋 Inventario base TNG",
