@@ -1355,7 +1355,7 @@ if opcion == "👥 Empleados":
 
     st.title("👥 Gestión de Empleados")
 
-    pestaña1, pestaña2, pestaña3, pestaña4 = st.tabs([
+    pestaña1, pestaña2, pestaña3 = st.tabs([
         "➕ Registrar empleado",
         "📋 Consultar empleados",
         "🏷️ Clasificar trabajadores existentes"
