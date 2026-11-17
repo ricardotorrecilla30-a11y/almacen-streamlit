@@ -171,6 +171,23 @@ hr { border-color: #dce7ef; }
 .tng-pro-note {background:#e8f3f9;border-left:4px solid #16749e;
   padding:12px 16px;border-radius:8px;color:#15384f;font-weight:600;}
 
+
+/* Tema claro: controles, navegación y pestañas sin fondos oscuros. */
+.stApp, [data-testid="stAppViewContainer"] {background:#ffffff !important;color:#172b3a !important;}
+.stApp [data-testid="stSidebar"] {background:#f5f7fa !important;}
+.stApp [data-testid="stSidebar"] *, .stApp [data-testid="stSidebar"] [data-testid="stRadio"] p,
+.stApp [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+.stApp [data-testid="stSidebar"] [data-testid="stWidgetLabel"] span {color:#102b46 !important;}
+.stApp [data-testid="stSidebar"] [data-testid="stRadio"] label {background:transparent !important;border:0 !important;}
+.stApp [data-testid="stSidebar"] [data-testid="stRadio"] label:hover {background:#e5ebf2 !important;}
+.stApp [role="tab"], .stApp [role="tab"] * {color:#172b3a !important;opacity:1 !important;font-weight:700 !important;}
+.stApp [role="tab"][aria-selected="true"], .stApp [role="tab"][aria-selected="true"] * {color:#145b85 !important;}
+.stApp [data-baseweb="select"] > div, .stApp [data-baseweb="input"], .stApp [data-baseweb="base-input"], .stApp [data-baseweb="textarea"], .stApp input, .stApp textarea {background:#ffffff !important;color:#172b3a !important;}
+.stApp [data-baseweb="select"] *, [data-baseweb="popover"] [role="option"] {color:#172b3a !important;}
+[data-baseweb="popover"] [role="listbox"], [data-baseweb="popover"] [role="option"] {background:#ffffff !important;}
+.stApp [data-testid="stButton"] button, .stApp [data-testid="stFormSubmitButton"] button, .stApp [data-testid="stDownloadButton"] button {background:#f1f5f9 !important;color:#102b46 !important;border:1px solid #bac8d6 !important;}
+.stApp [data-testid="stButton"] button *, .stApp [data-testid="stFormSubmitButton"] button *, .stApp [data-testid="stDownloadButton"] button * {color:#102b46 !important;}
+.stApp [data-testid="stForm"] {background:#ffffff !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -968,7 +985,13 @@ st.sidebar.divider()
 
 
 # Menú según rol
-rol = st.session_state.rol
+with conectar() as con:
+    cuenta_actual = con.execute("SELECT rol FROM usuarios WHERE usuario=? AND activo=1", (st.session_state.usuario,)).fetchone()
+if not cuenta_actual:
+    cerrar_sesion()
+    st.stop()
+st.session_state.rol = cuenta_actual[0]
+rol = cuenta_actual[0]
 
 opciones = []
 
@@ -1035,6 +1058,10 @@ GRUPOS_MENU = {
     "🤖 Asistente TNG": ["🤖 Asistente TNG 2.0"],
     "⚙️ Configuración": ["🔐 Gestión de contraseñas", "💾 Respaldos"],
 }
+# Inventario y sus siete módulos son exclusivos de Administrador.
+if rol != "Administrador":
+    opciones = [m for m in opciones if m not in GRUPOS_MENU["📦 Inventario"]]
+
 grupos_visibles = ["🏠 Inicio"] + [
     grupo for grupo, modulos in GRUPOS_MENU.items()
     if grupo != "🏠 Inicio" and any(modulo in opciones for modulo in modulos)
@@ -1055,6 +1082,9 @@ if grupo == "🏠 Inicio":
 else:
     disponibles = [m for m in GRUPOS_MENU[grupo] if m in opciones]
     opcion = st.sidebar.radio("Opciones", disponibles, key="tng_modulo_" + grupo)
+if opcion != "__inicio__" and opcion not in opciones:
+    st.error("No tienes permisos para acceder a este módulo.")
+    st.stop()
 st.sidebar.divider()
 
 if st.sidebar.button(
