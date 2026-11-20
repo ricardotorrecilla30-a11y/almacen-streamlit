@@ -1,4 +1,8 @@
-streamlit>=1.40,<2
+streamlit==1.39.0
 pandas>=2.2,<3
+numpy>=1.26,<3
+Pillow>=10,<12
+streamlit-drawable-canvas==0.9.3
+matplotlib>=3.8,<4
 openpyxl>=3.1,<4
 reportlab>=4,<5
