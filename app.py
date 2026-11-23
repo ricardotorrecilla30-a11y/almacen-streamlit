@@ -31,8 +31,8 @@ except ImportError:
 # ============================================================
 
 st.set_page_config(
-    page_title="TNG - Control de Uniformes",
-    page_icon="👕",
+    page_title="TNG | Plataforma de Dotación e Inventario",
+    page_icon="🏢",
     layout="wide"
 )
 
@@ -264,6 +264,81 @@ hr { border-color: #dce7ef; }
 .tng-kpi-pro-label {font-size:.88rem;color:#47627b;font-weight:700;}
 .tng-kpi-pro-value {font-size:2rem;color:#0e2c49;font-weight:850;margin-top:10px;}
 .stApp [data-testid="stTable"] thead th {background:#123b60 !important;color:#fff !important;}
+
+
+/* TNG GERENCIAL · refinamiento de interfaz de alto contraste */
+.stApp [data-testid="stMain"] {background: #f4f7fb !important;}
+.stApp [data-testid="stMain"] .block-container {max-width: 1510px; padding-top: 2rem;}
+.stApp [data-testid="stSidebar"] {background: #102941 !important;}
+.stApp [data-testid="stSidebar"] [data-testid="stWidgetLabel"] *,
+.stApp [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+.stApp [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] strong {
+  color:#f5faff !important;
+}
+.stApp [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
+  background:#1767b7 !important;
+  box-shadow:inset 3px 0 0 #79c9ff;
+}
+.stApp .tng-hero-new {
+  background:linear-gradient(110deg,#ffffff 0%,#f5faff 100%) !important;
+  border:1px solid #d9e5f0 !important;
+  border-left:5px solid #1477c9 !important;
+  padding:26px 30px !important;
+  box-shadow:0 10px 30px rgba(18,48,78,.06) !important;
+}
+.stApp .tng-hero-new h1 {font-size:2.15rem !important; letter-spacing:-.04em;}
+.stApp .tng-hero-new .tng-eyebrow {
+  font-size:.73rem;letter-spacing:.14em;font-weight:850;color:#126cb3 !important;
+}
+.stApp .tng-kpi-pro {
+  border:1px solid #dce7f0 !important;
+  border-top:3px solid #0c70c6 !important;
+  box-shadow:0 7px 24px rgba(15,43,74,.055) !important;
+  border-radius:14px !important;
+  padding:22px !important;min-height:128px;
+}
+.stApp .tng-kpi-pro-label {color:#526b82;font-size:.86rem;}
+.stApp .tng-kpi-pro-value {color:#0d2943;font-size:2.3rem;letter-spacing:-.045em;}
+.stApp .tng-section-head {
+  font-size:1.1rem;font-weight:850;letter-spacing:-.02em;
+  margin-top:26px;margin-bottom:11px;
+}
+.stApp [data-testid="stTabs"] [role="tab"] {
+  border-radius:6px 6px 0 0;
+  padding:10px 13px;
+}
+.stApp [data-testid="stTabs"] [role="tab"] * {color:#284761 !important;}
+.stApp [data-testid="stTabs"] [role="tab"][aria-selected="true"] * {color:#0068bc !important;}
+.stApp [data-testid="stMain"] [data-testid="stDataFrame"] {
+  border:1px solid #dce6f0 !important;
+  border-radius:12px !important;
+  box-shadow:0 4px 14px rgba(16,48,77,.03);
+}
+.stApp [data-testid="stMain"] [data-testid="stButton"] button:hover {
+  border-color:#126fc2 !important;
+  background:#eef6ff !important;
+}
+.stApp [data-testid="stMain"] [data-testid="stFormSubmitButton"] button:hover {
+  background:#095ba8 !important;
+}
+.stApp [data-testid="stMain"] input,
+.stApp [data-testid="stMain"] textarea {
+  background:#fff !important;color:#0d2943 !important;
+}
+.stApp .tng-management-strip {
+  background:#eef6fd;border:1px solid #d6e8f6;
+  padding:12px 16px;border-radius:10px;color:#274962;
+  font-size:.88rem;margin:10px 0 0;
+}
+.stApp .tng-management-strip strong {color:#0c3e6c;}
+.stApp .tng-live-dot {
+  display:inline-block;width:8px;height:8px;
+  border-radius:50%;background:#16a36d;margin-right:8px;
+}
+@media (max-width: 800px) {
+  .stApp .tng-hero-new {padding:18px !important;}
+  .stApp .tng-hero-new h1 {font-size:1.6rem !important;}
+}
 
 </style>
 """, unsafe_allow_html=True)
@@ -1222,6 +1297,30 @@ if opcion == "__inicio__":
             unsafe_allow_html=True
         )
     st.caption("Datos calculados de los registros disponibles en la base de datos.")
+
+    # Resumen ejecutivo descargable: no modifica la base de datos.
+    if rol == "Administrador":
+        st.markdown('<div class="tng-management-strip">'
+                    '<span class="tng-live-dot"></span>'
+                    '<strong>Visión gerencial</strong> · Datos del sistema al '
+                    + date.today().strftime("%d/%m/%Y") +
+                    ' · Inventario, personal y solicitudes en un solo tablero'
+                    '</div>', unsafe_allow_html=True)
+        resumen_ejecutivo = (
+            "Indicador,Valor\\n"
+            f"Trabajadores activos,{trabajadores}\\n"
+            f"Entregas del mes,{entregas_mes}\\n"
+            f"Solicitudes pendientes,{solicitudes_pend}\\n"
+            f"Referencias activas,{resumen_stock[0]}\\n"
+            f"Unidades en inventario,{resumen_stock[1]}\\n"
+            f"Referencias en mínimo o menos,{resumen_stock[2]}\\n"
+        )
+        st.download_button(
+            "📥 Descargar resumen gerencial (CSV)",
+            data=resumen_ejecutivo.encode("utf-8-sig"),
+            file_name=f"TNG_Resumen_Gerencial_{date.today().isoformat()}.csv",
+            mime="text/csv", key="descarga_resumen_gerencial"
+        )
 
     st.markdown('<div class="tng-section-head">Accesos rápidos</div>',
                 unsafe_allow_html=True)
