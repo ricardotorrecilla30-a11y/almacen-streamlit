@@ -207,6 +207,64 @@ hr { border-color: #dce7ef; }
 .tng-kpi {border-radius:10px;padding:18px 16px;color:white;min-height:110px;}
 .tng-kpi-label {font-size:.85rem;font-weight:650;}
 .tng-kpi-value {font-size:1.9rem;font-weight:800;margin-top:9px;}
+
+/* TNG PREMIUM 2026: identidad corporativa y legibilidad */
+:root {color-scheme:light;}
+.stApp {background:#f6f9fd !important;}
+.stApp [data-testid="stMain"] {background:#f6f9fd !important;}
+.stApp [data-testid="stSidebar"] {background:#102a47 !important;border-right:1px solid #244b70;}
+.stApp [data-testid="stSidebar"] [data-testid="stRadio"] label {
+  border:1px solid transparent !important;border-radius:9px !important;
+  margin:2px 0 !important;transition:background .12s ease;
+}
+.stApp [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
+  background:#1269c4 !important;border-color:#388bdb !important;
+}
+.stApp [data-testid="stSidebar"] [data-testid="stRadio"] label:hover {background:#1a4268 !important;}
+.stApp [data-testid="stMain"] .block-container {max-width:1450px;padding-top:1.5rem;}
+.stApp h1,.stApp h2,.stApp h3 {color:#0d2b48 !important;}
+.stApp .tng-hero-new {padding:18px 22px !important;background:#fff !important;
+ border:1px solid #dfe8f2 !important;border-radius:15px !important;
+ box-shadow:0 5px 20px rgba(14,46,75,.045) !important;}
+.stApp .tng-hero-new h1 {color:#0c2945 !important;font-size:1.85rem !important;}
+.stApp .tng-section-head {color:#0d2b48;font-size:1.12rem;margin-top:23px;}
+.stApp [data-testid="stForm"],.stApp [data-testid="stExpander"] {
+ background:#fff !important;border:1px solid #d9e4ef !important;
+ border-radius:14px !important;box-shadow:0 3px 12px rgba(12,44,76,.03);
+}
+.stApp [data-testid="stWidgetLabel"] p,.stApp [data-testid="stWidgetLabel"] span {
+ color:#173650 !important;font-weight:750 !important;opacity:1 !important;
+}
+.stApp [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+.stApp [data-testid="stSidebar"] [data-testid="stWidgetLabel"] span {color:#fff !important;}
+.stApp [data-baseweb="input"],.stApp [data-baseweb="select"]>div,
+.stApp [data-baseweb="textarea"] {
+ background:#fff !important;border:1px solid #b9cbdc !important;border-radius:9px !important;
+}
+.stApp input,.stApp textarea,.stApp [data-baseweb="select"] * {color:#12324b !important;}
+.stApp [role="tab"],.stApp [role="tab"] * {
+ color:#344d66 !important;font-weight:750 !important;opacity:1 !important;
+}
+.stApp [role="tab"][aria-selected="true"],.stApp [role="tab"][aria-selected="true"] * {
+ color:#075eb2 !important;
+}
+.stApp [data-testid="stMain"] [data-testid="stButton"] button {
+ background:#fff !important;color:#125b98 !important;
+ border:1px solid #c6d9e8 !important;border-radius:9px !important;
+}
+.stApp [data-testid="stMain"] [data-testid="stButton"] button * {color:#125b98 !important;}
+.stApp [data-testid="stMain"] [data-testid="stFormSubmitButton"] button {
+ background:#0c6bd2 !important;color:white !important;border:0 !important;
+ border-radius:9px !important;
+}
+.stApp [data-testid="stMain"] [data-testid="stFormSubmitButton"] button * {color:white !important;}
+.tng-kpi-pro {background:#fff;border:1px solid #dce7f2;border-top:4px solid #0c72d4;
+ border-radius:12px;padding:19px 18px;min-height:116px;
+ box-shadow:0 4px 14px rgba(15,48,79,.045);}
+.tng-kpi-pro-label {font-size:.88rem;color:#47627b;font-weight:700;}
+.tng-kpi-pro-value {font-size:2rem;color:#0e2c49;font-weight:850;margin-top:10px;}
+.stApp [data-testid="stTable"] thead th {background:#123b60 !important;color:#fff !important;}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -1110,137 +1168,129 @@ if st.sidebar.button(
 if opcion == "__inicio__":
     st.markdown(
         '<section class="tng-hero-new">'
-        '<div class="tng-eyebrow">HUTCHISON PORTS TNG · CONTROL OPERATIVO</div>'
-        f'<h1>Bienvenido, {rol}</h1>'
-        '<p>Inventario, dotaciones, entregas y seguimiento en un solo lugar.</p>'
+        '<div class="tng-eyebrow">TNG · PLATAFORMA DE CONTROL DE UNIFORMES</div>'
+        f'<h1>Panel de {rol}</h1>'
+        '<p>Seguimiento operativo y gestión de dotaciones en un solo lugar.</p>'
         '</section>', unsafe_allow_html=True
     )
-    # Indicadores en vivo: nunca se sustituyen por cifras de ejemplo.
     with conectar() as con:
-        total_trabajadores = con.execute(
+        trabajadores = con.execute(
             "SELECT COUNT(*) FROM empleados WHERE activo=1"
         ).fetchone()[0]
-        resumen_stock = con.execute("""
-            SELECT COUNT(*), COALESCE(SUM(existencia),0),
-                   COALESCE(SUM(CASE WHEN existencia <= minimo THEN 1 ELSE 0 END),0),
-                   COALESCE(SUM(CASE WHEN existencia=0 THEN 1 ELSE 0 END),0)
-            FROM prendas WHERE activo=1
-        """).fetchone()
-        top_prendas = con.execute("""
-            SELECT nombre, SUM(existencia) AS total
-            FROM prendas WHERE activo=1 GROUP BY nombre
-            ORDER BY total DESC LIMIT 8
-        """).fetchall()
-        alertas_home = con.execute("""
-            SELECT nombre, talla, existencia, minimo
-            FROM prendas WHERE activo=1 AND existencia <= minimo
-            ORDER BY existencia ASC, nombre, talla LIMIT 12
-        """).fetchall()
-
-    st.markdown('<div class="tng-section-head">Resumen en tiempo real</div>', unsafe_allow_html=True)
-    with conectar() as con:
-        entregas_mes = con.execute("SELECT COALESCE(SUM(cantidad),0) FROM entregas WHERE substr(fecha,1,7)=?", (date.today().strftime("%Y-%m"),)).fetchone()[0]
-        solicitudes_pend = con.execute("SELECT COUNT(*) FROM solicitudes_almacen WHERE estado='Pendiente'").fetchone()[0]
-    tarjetas = [("Trabajadores activos", total_trabajadores, "#0878e8"), ("Prendas entregadas este mes", entregas_mes, "#198754"), ("Referencias bajo mínimo", resumen_stock[2], "#a85b08"), ("Solicitudes pendientes", solicitudes_pend, "#7041a5")]
-    for col, (etiqueta, valor, color) in zip(st.columns(4), tarjetas):
-        col.markdown(f'<div class="tng-kpi" style="background:{color}"><div class="tng-kpi-label">{etiqueta}</div><div class="tng-kpi-value">{valor:,}</div></div>', unsafe_allow_html=True)
-    st.caption("Indicadores calculados con los datos registrados en la base de datos actual.")
-
-    st.markdown('<div class="tng-section-head">Accesos rápidos</div>', unsafe_allow_html=True)
-    prioritarios = ["👥 Trabajadores", "📦 Inventario", "🚚 Dotaciones", "⚙️ Administración"]
-    accesos = [g for g in prioritarios if g in grupos_visibles]
-    cols = st.columns(len(accesos)) if accesos else []
-    for i,g in enumerate(accesos):
-        with cols[i]:
-            if st.button(g, use_container_width=True, key="inicio_"+g):
-                # El estado se aplica ANTES de crear el radio en el siguiente rerun.
-                st.session_state["tng_grupo_destino"] = g
-                st.rerun()
-
-    grafico, alertas = st.columns([1.2,1],gap="large")
-    with grafico:
-        st.markdown('<div class="tng-section-head">Existencias por artículo</div>', unsafe_allow_html=True)
-        if top_prendas:
-            import pandas as pd
-            graf = pd.DataFrame(top_prendas,columns=["Artículo","Unidades"])
-            st.bar_chart(graf.set_index("Artículo"),color="#187ca8",height=310)
-        else:
-            st.info("Registra prendas para visualizar las existencias por artículo.")
-    with alertas:
-        st.markdown('<div class="tng-section-head">Alertas de abastecimiento</div>', unsafe_allow_html=True)
-        if alertas_home:
-            import pandas as pd
-            st.dataframe(
-                pd.DataFrame(alertas_home,columns=["Artículo","Talla","Stock","Mínimo"]),
-                use_container_width=True,hide_index=True,height=310
-            )
-            st.caption("Se muestran hasta 12 referencias con existencias iguales o inferiores al mínimo registrado.")
-        else:
-            st.success("No hay referencias bajo su mínimo registrado.")
-    # Inteligencia operativa: consulta únicamente la base de datos existente.
-    st.markdown('<div class="tng-section-head">Prioridades para abastecimiento</div>',
-                unsafe_allow_html=True)
-    with conectar() as con:
-        pendientes_reposicion = con.execute("""
-            SELECT nombre, talla, existencia, minimo,
-                   MAX(minimo - existencia, 0) AS faltante
-            FROM prendas
-            WHERE activo = 1 AND existencia < minimo
-            ORDER BY faltante DESC, existencia ASC, nombre
-        """).fetchall()
+        entregas_mes = con.execute(
+            "SELECT COALESCE(SUM(cantidad),0) FROM entregas WHERE substr(fecha,1,7)=?",
+            (date.today().strftime("%Y-%m"),)
+        ).fetchone()[0]
+        solicitudes_pend = con.execute(
+            "SELECT COUNT(*) FROM solicitudes_almacen WHERE estado='Pendiente'"
+        ).fetchone()[0]
         ultimas_entregas = con.execute("""
             SELECT e.fecha, p.nombre, p.talla, e.cantidad
-            FROM entregas e
-            JOIN prendas p ON p.id = e.prenda_id
+            FROM entregas e JOIN prendas p ON p.id=e.prenda_id
             ORDER BY e.fecha DESC, e.id DESC LIMIT 8
         """).fetchall()
-    prioridades, movimientos = st.columns([1.2, 1], gap="large")
-    with prioridades:
-        st.markdown("**Referencias que necesitan revisión**")
-        if pendientes_reposicion:
-            import pandas as pd
-            df_pend = pd.DataFrame(
-                pendientes_reposicion,
-                columns=["Artículo", "Talla", "Existencia", "Mínimo", "Faltante"]
-            )
-            filtro = st.text_input("Buscar artículo o talla", key="home_filtro_abasto",
-                                   placeholder="Ejemplo: OVEROL ROJO o 42")
-            if filtro.strip():
-                mask = (df_pend["Artículo"].astype(str).str.contains(
-                    filtro.strip(), case=False, regex=False)
-                    | df_pend["Talla"].astype(str).str.contains(
-                        filtro.strip(), case=False, regex=False))
-                df_pend = df_pend.loc[mask]
-            st.dataframe(df_pend, hide_index=True, use_container_width=True, height=250)
-            st.download_button(
-                "⬇️ Exportar necesidades de abastecimiento (CSV)",
-                data=df_pend.to_csv(index=False).encode("utf-8-sig"),
-                file_name="TNG_necesidades_abastecimiento.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="home_descarga_abasto",
-            )
-            st.caption("Faltante = mínimo registrado − existencia actual. "
-                       "Es una referencia de planeación, no una orden de compra.")
-        else:
-            st.success("No hay prendas por debajo de su mínimo registrado.")
-    with movimientos:
-        st.markdown("**Últimas entregas registradas**")
-        if ultimas_entregas:
-            import pandas as pd
-            st.dataframe(
-                pd.DataFrame(ultimas_entregas,
-                             columns=["Fecha", "Artículo", "Talla", "Cantidad"]),
-                use_container_width=True, hide_index=True, height=250
-            )
-        else:
-            st.info("Todavía no hay entregas registradas.")
+        if rol == "Administrador":
+            resumen_stock = con.execute("""
+                SELECT COUNT(*), COALESCE(SUM(existencia),0),
+                COALESCE(SUM(CASE WHEN existencia<=minimo THEN 1 ELSE 0 END),0)
+                FROM prendas WHERE activo=1
+            """).fetchone()
+            top_prendas = con.execute("""
+                SELECT nombre,SUM(existencia) FROM prendas WHERE activo=1
+                GROUP BY nombre ORDER BY SUM(existencia) DESC LIMIT 8
+            """).fetchall()
+            alertas_home = con.execute("""
+                SELECT nombre,talla,existencia,minimo,
+                       MAX(minimo-existencia,0) AS faltante
+                FROM prendas WHERE activo=1 AND existencia<minimo
+                ORDER BY faltante DESC, existencia ASC LIMIT 30
+            """).fetchall()
 
-    st.markdown(
-        '<div class="tng-pro-note">Datos en tiempo real de la base actual. '
-        'Revisa las alertas antes de registrar nuevas dotaciones.</div>',
-        unsafe_allow_html=True
-    )
+    st.markdown('<div class="tng-section-head">Resumen operativo</div>',
+                unsafe_allow_html=True)
+    tarjetas = [
+        ("Trabajadores activos", trabajadores, "users"),
+        ("Entregas del mes", entregas_mes, "truck"),
+        ("Solicitudes pendientes", solicitudes_pend, "clipboard"),
+    ]
+    if rol == "Administrador":
+        tarjetas.append(("Referencias en mínimo", resumen_stock[2], "alerta"))
+    for col, (etiqueta, valor, _) in zip(st.columns(len(tarjetas)), tarjetas):
+        col.markdown(
+            f'<div class="tng-kpi-pro"><div class="tng-kpi-pro-label">{etiqueta}</div>'
+            f'<div class="tng-kpi-pro-value">{valor:,}</div></div>',
+            unsafe_allow_html=True
+        )
+    st.caption("Datos calculados de los registros disponibles en la base de datos.")
+
+    st.markdown('<div class="tng-section-head">Accesos rápidos</div>',
+                unsafe_allow_html=True)
+    prioritarios = ["👥 Trabajadores", "📦 Inventario", "🚚 Dotaciones", "⚙️ Administración"]
+    accesos = [g for g in prioritarios if g in grupos_visibles]
+    for col, g in zip(st.columns(len(accesos)), accesos):
+        if col.button(g, use_container_width=True, key="inicio_"+g):
+            st.session_state["tng_grupo_destino"] = g
+            st.rerun()
+
+    if rol == "Administrador":
+        grafico, alertas = st.columns([1.05, 1], gap="large")
+        with grafico:
+            st.markdown('<div class="tng-section-head">Existencias por artículo</div>',
+                        unsafe_allow_html=True)
+            if top_prendas:
+                import pandas as pd
+                st.bar_chart(
+                    pd.DataFrame(top_prendas, columns=["Artículo", "Unidades"])
+                    .set_index("Artículo"), color="#0d72d8", height=300
+                )
+            else:
+                st.info("Todavía no hay prendas registradas.")
+        with alertas:
+            st.markdown('<div class="tng-section-head">Prioridades de abastecimiento</div>',
+                        unsafe_allow_html=True)
+            if alertas_home:
+                import pandas as pd
+                df_alertas = pd.DataFrame(
+                    alertas_home,
+                    columns=["Artículo", "Talla", "Existencia", "Mínimo", "Faltante"]
+                )
+                filtro = st.text_input(
+                    "Buscar artículo o talla", key="home_filtro_abasto",
+                    placeholder="Buscar en las alertas"
+                )
+                if filtro.strip():
+                    termino = filtro.strip()
+                    df_alertas = df_alertas[
+                        df_alertas["Artículo"].astype(str).str.contains(
+                            termino, case=False, regex=False)
+                        | df_alertas["Talla"].astype(str).str.contains(
+                            termino, case=False, regex=False)
+                    ]
+                st.dataframe(df_alertas, use_container_width=True,
+                             hide_index=True, height=240)
+                st.download_button(
+                    "Exportar alertas CSV",
+                    data=df_alertas.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="TNG_alertas_abastecimiento.csv",
+                    mime="text/csv", key="home_exportar_alertas",
+                    use_container_width=True
+                )
+            else:
+                st.success("No hay prendas por debajo de su mínimo.")
+    else:
+        st.info(
+            "Vista de Almacén: aquí se muestran entregas y solicitudes. "
+            "El inventario y sus alertas están reservados al Administrador."
+        )
+    st.markdown('<div class="tng-section-head">Últimas entregas registradas</div>',
+                unsafe_allow_html=True)
+    if ultimas_entregas:
+        import pandas as pd
+        st.dataframe(pd.DataFrame(
+            ultimas_entregas, columns=["Fecha", "Artículo", "Talla", "Cantidad"]
+        ), use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay entregas registradas.")
 
 elif opcion == "🔐 Gestión de contraseñas":
     st.title("👥 Administración de usuarios")
