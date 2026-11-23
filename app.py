@@ -12,10 +12,33 @@ import os
 import re
 from pathlib import Path
 
-try:
-    from streamlit_drawable_canvas import st_canvas
-except ImportError:
-    st_canvas = None
+from types import SimpleNamespace
+from PIL import Image, ImageOps
+import numpy as np
+
+def st_canvas(*, key, width=700, height=220, **kwargs):
+    """Compatible signature input using a PNG/JPG upload."""
+    st.caption("Adjunta una imagen PNG/JPG de la firma del trabajador.")
+    archivo = st.file_uploader("Imagen de firma", type=["png", "jpg", "jpeg"], key=f"{key}_archivo")
+    if archivo is None:
+        return SimpleNamespace(image_data=None)
+    try:
+        if archivo.size > 3_000_000:
+            st.error("La firma no debe superar 3 MB.")
+            return SimpleNamespace(image_data=None)
+        imagen = ImageOps.exif_transpose(Image.open(archivo)).convert("RGBA")
+        imagen.thumbnail((int(width), int(height)))
+        fondo = Image.new("RGBA", (int(width), int(height)), "#FFFFFF")
+        fondo.alpha_composite(imagen, ((int(width)-imagen.width)//2, (int(height)-imagen.height)//2))
+        pixels = np.asarray(fondo).copy()
+        if not np.any(pixels[:, :, :3] < 180):
+            st.error("La imagen no contiene trazos de firma visibles.")
+            return SimpleNamespace(image_data=None)
+        st.image(fondo, caption="Vista previa de firma", width=360)
+        return SimpleNamespace(image_data=pixels)
+    except Exception:
+        st.error("No se pudo leer la imagen. Adjunta un PNG o JPG válido.")
+        return SimpleNamespace(image_data=None)
 
 try:
     from reportlab.lib.pagesizes import A4
@@ -383,6 +406,9 @@ def inicializar_bd():
     if "tipo_trabajador" not in columnas_empleados:
         # Los registros anteriores quedan sin clasificar; no se supone su régimen laboral.
         cursor.execute("ALTER TABLE empleados ADD COLUMN tipo_trabajador TEXT NOT NULL DEFAULT 'Sin clasificar'")
+    if "color_uniforme" not in columnas_empleados:
+        cursor.execute("ALTER TABLE empleados ADD COLUMN color_uniforme TEXT DEFAULT 'Sin asignar'")
+
 
     columnas_dotaciones = [fila[1] for fila in cursor.execute(
         "PRAGMA table_info(dotaciones)"
@@ -577,7 +603,10 @@ def firma_a_base64(image_data):
     try:
         from PIL import Image
         imagen = Image.fromarray(image_data.astype("uint8"), mode="RGBA")
-        bbox = imagen.getbbox()
+        import numpy as np
+        if not np.any(np.asarray(imagen)[:, :, :3] < 180):
+            return None
+        bbox = Image.fromarray(255 - np.asarray(imagen.convert("RGB")).min(axis=2)).getbbox()
         if bbox:
             imagen = imagen.crop(bbox)
         buffer = BytesIO()
@@ -1411,179 +1440,109 @@ elif opcion == "📜 Historial por prenda":
     else: st.info("No hay prendas registradas.")
 
 if opcion == "👥 Empleados":
-
-    st.title("👥 Gestión de Empleados")
-
-    pestaña1, pestaña2, pestaña3 = st.tabs([
-        "➕ Registrar empleado",
-        "📋 Consultar empleados",
+    st.title("👥 Gestión de Trabajadores")
+    st.caption("Dos grupos de uniformes: Beige y Azul. Las matrículas se mantienen únicas en todo el sistema.")
+    tab_beige, tab_azul, pestaña3 = st.tabs([
+        "🟫 Camisola / Pantalón Beige",
+        "🔵 Camisola / Pantalón Azul",
         "🏷️ Clasificar trabajadores existentes"
     ])
 
-    with pestaña1:
-
-        st.subheader("Registrar nuevo empleado")
-
-        with st.form("form_empleado"):
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-
-                numero = st.text_input(
-                    "Matrícula *"
-                )
-
-                nombre = st.text_input(
-                    "Nombre completo *"
-                )
-
-                puesto = st.text_input(
-                    "Puesto *"
-                )
-
-                area = st.text_input(
-                    "Área *"
-                )
-
-                disciplina = st.text_input(
-                    "Disciplina"
-                )
-
-                tipo_trabajador = st.selectbox(
-                    "Tipo de trabajador *",
-                    ["Selecciona un tipo", "Sindicalizado", "Base"],
-                    help="Selecciona el régimen laboral que corresponda según los registros autorizados de TNG."
-                )
-
-            with col2:
-
-                talla_camisa = st.selectbox(
-                    "Talla de camisola",
-                    ["", "28", "30", "32", "34", "36", "38", "40",
-                     "42", "44", "46", "48", "50", "52"]
-                )
-
-                talla_pantalon = st.selectbox(
-                    "Talla de pantalón",
-                    ["", "28", "30", "32", "34", "36", "38", "40",
-                     "42", "44", "46", "48", "50", "52"]
-                )
-
-                fecha_ingreso = st.date_input(
-                    "Fecha de ingreso"
-                )
-
-            guardar = st.form_submit_button(
-                "💾 Guardar empleado",
-                use_container_width=True
-            )
-
-            if guardar:
-
-                if not numero.strip() or not nombre.strip() \
-                        or not puesto.strip() or not area.strip() \
-                        or tipo_trabajador == "Selecciona un tipo":
-
-                    st.error(
-                        "❌ Completa todos los campos obligatorios."
+    for color_uniforme, tab in [("Beige", tab_beige), ("Azul", tab_azul)]:
+        with tab:
+            st.subheader(f"Trabajadores · Uniforme {color_uniforme}")
+            st.caption(f"Registro y consulta exclusivos del grupo {color_uniforme}.")
+            alta, consulta = st.tabs(["➕ Registrar trabajador", "📋 Consultar trabajadores"])
+            with alta:
+                with st.form(f"form_empleado_{color_uniforme}"):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        numero = st.text_input("Matrícula *", key=f"mat_{color_uniforme}")
+                        nombre = st.text_input("Nombre completo *", key=f"nom_{color_uniforme}")
+                        puesto = st.text_input("Puesto *", key=f"puesto_{color_uniforme}")
+                        area = st.text_input("Área *", key=f"area_{color_uniforme}")
+                        disciplina = st.text_input("Disciplina", key=f"disc_{color_uniforme}")
+                        tipo_trabajador = st.selectbox(
+                            "Tipo de trabajador *",
+                            ["Selecciona un tipo", "Sindicalizado", "Base"],
+                            key=f"tipo_{color_uniforme}"
+                        )
+                    with c2:
+                        tallas = ["", "28", "30", "32", "34", "36", "38", "40",
+                                  "42", "44", "46", "48", "50", "52"]
+                        talla_camisa = st.selectbox(
+                            f"Talla de camisola {color_uniforme.lower()}",
+                            tallas, key=f"camisa_{color_uniforme}"
+                        )
+                        talla_pantalon = st.selectbox(
+                            f"Talla de pantalón {color_uniforme.lower()}",
+                            tallas, key=f"pantalon_{color_uniforme}"
+                        )
+                        fecha_ingreso = st.date_input(
+                            "Fecha de ingreso", key=f"fecha_{color_uniforme}"
+                        )
+                    guardar = st.form_submit_button(
+                        f"💾 Registrar trabajador en {color_uniforme}",
+                        use_container_width=True
                     )
-
-                else:
-
-                    conexion = conectar()
-                    cursor = conexion.cursor()
-
-                    try:
-
-                        cursor.execute("""
-                            INSERT INTO empleados
-                            (numero_empleado, nombre, puesto, area, disciplina,
-                             talla_camisa, talla_pantalon, fecha_ingreso, tipo_trabajador)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            numero.strip(),
-                            nombre.strip(),
-                            puesto.strip(),
-                            area.strip(),
-                            disciplina.strip(),
-                            talla_camisa,
-                            talla_pantalon,
-                            str(fecha_ingreso),
-                            tipo_trabajador
-                        ))
-
-                        conexion.commit()
-                        registrar_bitacora("Empleados", "Alta de trabajador", f"Matrícula: {numero.strip()} | Nombre: {nombre.strip()}")
-
-                        st.success(
-                            "✅ Empleado registrado correctamente."
-                        )
-
-                    except sqlite3.IntegrityError:
-
-                        st.error(
-                            "❌ La matrícula ya existe."
-                        )
-
-                    finally:
-
-                        conexion.close()
-
-    with pestaña2:
-
-        st.subheader("📋 Empleados registrados")
-
-        conexion = conectar()
-        cursor = conexion.cursor()
-
-        cursor.execute("""
-            SELECT
-                numero_empleado,
-                nombre,
-                puesto,
-                area,
-                disciplina,
-                tipo_trabajador,
-                talla_camisa,
-                talla_pantalon,
-                fecha_ingreso
-            FROM empleados
-            WHERE activo = 1
-            ORDER BY nombre
-        """)
-
-        empleados = cursor.fetchall()
-        conexion.close()
-
-        if empleados:
-
-            import pandas as pd
-
-            df = pd.DataFrame(
-                empleados,
-                columns=[
-                    "Matrícula",
-                    "Nombre",
-                    "Puesto",
-                    "Área",
-                    "Disciplina",
-                    "Tipo de trabajador",
-                    "Talla camisola",
-                    "Talla pantalón",
+                if guardar:
+                    if (not all([numero.strip(), nombre.strip(), puesto.strip(),
+                                 area.strip()])
+                            or tipo_trabajador == "Selecciona un tipo"):
+                        st.error("Completa todos los campos obligatorios.")
+                    else:
+                        try:
+                            with conectar() as con:
+                                con.execute("""
+                                    INSERT INTO empleados
+                                    (numero_empleado, nombre, puesto, area, disciplina,
+                                     talla_camisa, talla_pantalon, fecha_ingreso,
+                                     tipo_trabajador, color_uniforme)
+                                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                                """, (numero.strip(), nombre.strip(), puesto.strip(),
+                                      area.strip(), disciplina.strip(), talla_camisa,
+                                      talla_pantalon, str(fecha_ingreso),
+                                      tipo_trabajador, color_uniforme))
+                            registrar_bitacora(
+                                "Empleados", "Alta de trabajador",
+                                f"Matrícula: {numero.strip()} | Color: {color_uniforme}"
+                            )
+                            st.success(f"Trabajador registrado en {color_uniforme}.")
+                        except sqlite3.IntegrityError:
+                            st.error("La matrícula ya está registrada.")
+                        except sqlite3.Error as exc:
+                            st.error(f"No se pudo registrar: {exc}")
+            with consulta:
+                busqueda = st.text_input(
+                    f"Buscar por matrícula o nombre ({color_uniforme})",
+                    key=f"buscar_{color_uniforme}"
+                )
+                with conectar() as con:
+                    filas = con.execute("""
+                        SELECT numero_empleado, nombre, puesto, area, disciplina,
+                               tipo_trabajador, talla_camisa, talla_pantalon,
+                               fecha_ingreso
+                        FROM empleados
+                        WHERE activo=1 AND color_uniforme=?
+                          AND (numero_empleado LIKE ? OR nombre LIKE ?)
+                        ORDER BY nombre
+                    """, (color_uniforme, f"%{busqueda.strip()}%",
+                          f"%{busqueda.strip()}%")).fetchall()
+                import pandas as pd
+                df = pd.DataFrame(filas, columns=[
+                    "Matrícula", "Nombre", "Puesto", "Área", "Disciplina",
+                    "Tipo de trabajador", "Talla camisola", "Talla pantalón",
                     "Fecha ingreso"
-                ]
-            )
-
-            st.dataframe(
-                df,
-                use_container_width=True,
-                hide_index=True
-            )
-
-        else:
-
-            st.info("No hay empleados registrados.")
+                ])
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.caption(f"{len(df)} trabajadores en el grupo {color_uniforme}.")
+                if not df.empty:
+                    st.download_button(
+                        f"⬇️ Exportar trabajadores {color_uniforme} (CSV)",
+                        df.to_csv(index=False).encode("utf-8-sig"),
+                        file_name=f"TNG_Trabajadores_{color_uniforme}.csv",
+                        mime="text/csv", key=f"csv_{color_uniforme}"
+                    )
 
     with pestaña3:
         st.subheader("Clasificar trabajadores ya registrados")
@@ -1603,17 +1562,18 @@ if opcion == "👥 Empleados":
             with st.form("form_clasificar_trabajador"):
                 trabajador_key = st.selectbox("Selecciona al trabajador", list(trabajadores_dict.keys()))
                 tipo_nuevo = st.selectbox("Tipo de trabajador", ["Sindicalizado", "Base"])
+                color_nuevo = st.selectbox("Color de uniforme", ["Beige", "Azul", "Sin asignar"])
                 guardar_tipo = st.form_submit_button("💾 Guardar clasificación", use_container_width=True)
             if guardar_tipo:
                 trabajador = trabajadores_dict[trabajador_key]
                 conexion = conectar()
                 try:
                     conexion.execute(
-                        "UPDATE empleados SET tipo_trabajador = ? WHERE id = ?",
-                        (tipo_nuevo, trabajador[0])
+                        "UPDATE empleados SET tipo_trabajador = ?, color_uniforme = ? WHERE id = ?",
+                        (tipo_nuevo, color_nuevo, trabajador[0])
                     )
                     conexion.commit()
-                    registrar_bitacora("Empleados", "Clasificación laboral actualizada", f"Matrícula: {trabajador[1]} | Tipo: {tipo_nuevo}")
+                    registrar_bitacora("Empleados", "Clasificación laboral actualizada", f"Matrícula: {trabajador[1]} | Tipo: {tipo_nuevo} | Color: {color_nuevo}")
                     st.success(f"Se actualizó {trabajador[1]} como {tipo_nuevo}.")
                     st.rerun()
                 except Exception as exc:
