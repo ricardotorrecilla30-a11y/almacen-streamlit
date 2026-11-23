@@ -13,31 +13,33 @@ import re
 from pathlib import Path
 
 from types import SimpleNamespace
-from PIL import Image, ImageOps
+from PIL import Image
 import numpy as np
+import streamlit.components.v1 as components
+
+# Componente de firma propio: no usa streamlit-drawable-canvas.
+_SIGNATURE_FRONTEND = Path(__file__).resolve().parent / "firma_component"
+_signature_pad = components.declare_component("tng_signature_pad", path=str(_SIGNATURE_FRONTEND))
 
 def st_canvas(*, key, width=700, height=220, **kwargs):
-    """Compatible signature input using a PNG/JPG upload."""
-    st.caption("Adjunta una imagen PNG/JPG de la firma del trabajador.")
-    archivo = st.file_uploader("Imagen de firma", type=["png", "jpg", "jpeg"], key=f"{key}_archivo")
-    if archivo is None:
+    """Recuadro interactivo para firma con mouse, pantalla táctil o lápiz."""
+    data_url = _signature_pad(width=int(width), height=int(height), key=key, default=None)
+    if not data_url:
         return SimpleNamespace(image_data=None)
     try:
-        if archivo.size > 3_000_000:
-            st.error("La firma no debe superar 3 MB.")
+        if not isinstance(data_url, str) or not data_url.startswith("data:image/png;base64,"):
             return SimpleNamespace(image_data=None)
-        imagen = ImageOps.exif_transpose(Image.open(archivo)).convert("RGBA")
-        imagen.thumbnail((int(width), int(height)))
-        fondo = Image.new("RGBA", (int(width), int(height)), "#FFFFFF")
-        fondo.alpha_composite(imagen, ((int(width)-imagen.width)//2, (int(height)-imagen.height)//2))
-        pixels = np.asarray(fondo).copy()
-        if not np.any(pixels[:, :, :3] < 180):
-            st.error("La imagen no contiene trazos de firma visibles.")
+        raw = base64.b64decode(data_url.partition(",")[2], validate=True)
+        if len(raw) > 2_000_000:
+            st.error("La firma supera el tamaño permitido.")
             return SimpleNamespace(image_data=None)
-        st.image(fondo, caption="Vista previa de firma", width=360)
-        return SimpleNamespace(image_data=pixels)
+        img = Image.open(BytesIO(raw)).convert("RGBA")
+        if img.size != (int(width), int(height)):
+            st.error("Dimensiones de firma no válidas.")
+            return SimpleNamespace(image_data=None)
+        return SimpleNamespace(image_data=np.asarray(img).copy())
     except Exception:
-        st.error("No se pudo leer la imagen. Adjunta un PNG o JPG válido.")
+        st.error("No fue posible procesar la firma. Limpia el recuadro e inténtalo otra vez.")
         return SimpleNamespace(image_data=None)
 
 try:
