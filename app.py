@@ -17,15 +17,59 @@ from PIL import Image
 import numpy as np
 import streamlit.components.v1 as components
 
-# Componente de firma propio: no usa streamlit-drawable-canvas.
+# La firma no debe impedir que toda la aplicación arranque si falta el frontend.
+# La carpeta firma_component/index.html debe subirse completa a GitHub.
 _SIGNATURE_FRONTEND = Path(__file__).resolve().parent / "firma_component"
-_signature_pad = components.declare_component("tng_signature_pad", path=str(_SIGNATURE_FRONTEND))
+_signature_pad = None
+_signature_error = None
+if (_SIGNATURE_FRONTEND / "index.html").is_file():
+    try:
+        _signature_pad = components.declare_component(
+            "tng_signature_pad", path=str(_SIGNATURE_FRONTEND)
+        )
+    except Exception as exc:
+        _signature_error = str(exc)
+else:
+    _signature_error = "No se encontró firma_component/index.html en GitHub."
 
 def st_canvas(*, key, width=700, height=220, **kwargs):
-    """Recuadro interactivo para firma con mouse, pantalla táctil o lápiz."""
-    data_url = _signature_pad(width=int(width), height=int(height), key=key, default=None)
+    """Firma dibujada; alternativa de archivo si el componente no está disponible."""
+    data_url = None
+    if _signature_pad is not None:
+        try:
+            data_url = _signature_pad(
+                width=int(width), height=int(height), key=key, default=None
+            )
+        except Exception:
+            st.warning("No se pudo abrir el recuadro. Usa la opción de imagen de firma.")
+    else:
+        st.warning("Recuadro no disponible: " + (_signature_error or "componente ausente"))
     if not data_url:
-        return SimpleNamespace(image_data=None)
+        uploaded = st.file_uploader(
+            "Firma alternativa (PNG/JPG)", type=["png", "jpg", "jpeg"],
+            key=f"{key}_alternativa"
+        )
+        if uploaded is None:
+            return SimpleNamespace(image_data=None)
+        try:
+            if uploaded.size > 3_000_000:
+                st.error("El archivo supera los 3 MB.")
+                return SimpleNamespace(image_data=None)
+            im = Image.open(uploaded)
+            im.load()
+            im = im.convert("RGBA")
+            im.thumbnail((int(width), int(height)))
+            bg = Image.new("RGBA", (int(width), int(height)), "white")
+            bg.alpha_composite(im, ((int(width)-im.width)//2, (int(height)-im.height)//2))
+            arr = np.asarray(bg).copy()
+            if not np.any(arr[:,:,:3] < 180):
+                st.error("La firma está en blanco.")
+                return SimpleNamespace(image_data=None)
+            st.image(bg, caption="Vista previa de la firma", width=350)
+            return SimpleNamespace(image_data=arr)
+        except Exception:
+            st.error("Archivo de firma no válido.")
+            return SimpleNamespace(image_data=None)
     try:
         if not isinstance(data_url, str) or not data_url.startswith("data:image/png;base64,"):
             return SimpleNamespace(image_data=None)
@@ -39,7 +83,7 @@ def st_canvas(*, key, width=700, height=220, **kwargs):
             return SimpleNamespace(image_data=None)
         return SimpleNamespace(image_data=np.asarray(img).copy())
     except Exception:
-        st.error("No fue posible procesar la firma. Limpia el recuadro e inténtalo otra vez.")
+        st.error("No fue posible procesar la firma.")
         return SimpleNamespace(image_data=None)
 
 try:
