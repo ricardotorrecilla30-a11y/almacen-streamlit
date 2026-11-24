@@ -17,21 +17,6 @@ from PIL import Image
 import numpy as np
 import streamlit.components.v1 as components
 
-# La firma no debe impedir que toda la aplicación arranque si falta el frontend.
-# La carpeta firma_component/index.html debe subirse completa a GitHub.
-_SIGNATURE_FRONTEND = Path(__file__).resolve().parent / "firma_component"
-_signature_pad = None
-_signature_error = None
-if (_SIGNATURE_FRONTEND / "index.html").is_file():
-    try:
-        _signature_pad = components.declare_component(
-            "tng_signature_pad", path=str(_SIGNATURE_FRONTEND)
-        )
-    except Exception as exc:
-        _signature_error = str(exc)
-else:
-    _signature_error = "No se encontró firma_component/index.html en GitHub."
-
 def st_canvas(*, key, width=700, height=220, **kwargs):
     """Firma dibujada; alternativa de archivo si el componente no está disponible."""
     data_url = None
@@ -104,6 +89,23 @@ st.set_page_config(
     page_icon="👕",
     layout="wide"
 )
+
+# La firma no debe impedir que toda la aplicación arranque si falta el frontend.
+# La carpeta firma_component/index.html debe subirse completa a GitHub.
+_SIGNATURE_FRONTEND = Path(__file__).resolve().parent / "firma_component"
+_signature_pad = None
+_signature_error = None
+if (_SIGNATURE_FRONTEND / "index.html").is_file():
+    try:
+        _signature_pad = components.declare_component(
+            "tng_signature_pad", path=str(_SIGNATURE_FRONTEND)
+        )
+    except Exception as exc:
+        _signature_error = str(exc)
+else:
+    _signature_error = "No se encontró firma_component/index.html en GitHub."
+
+
 
 st.markdown("""
 <style>
@@ -444,6 +446,10 @@ def inicializar_bd():
     if "firma_fecha" not in columnas_entregas:
         cursor.execute("ALTER TABLE entregas ADD COLUMN firma_fecha TEXT")
 
+    for campo in ("jefe_usuario", "jefe_fecha", "jefe_firma"):
+        if campo not in columnas_entregas:
+            cursor.execute(f"ALTER TABLE entregas ADD COLUMN {campo} TEXT")
+
     columnas_empleados = [fila[1] for fila in cursor.execute(
         "PRAGMA table_info(empleados)"
     ).fetchall()]
@@ -747,13 +753,18 @@ def generar_pdf_acuse(datos):
     pdf.drawString(margen, y - 90, f"Empleado: {datos['nombre']}")
     pdf.drawString(margen, y - 104, f"Matrícula: {datos['matricula']}")
 
-    # Responsable
+    # Autorización
     rx = margen + 285
     pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(rx, y, "Responsable de entrega")
-    pdf.line(rx, y - 70, rx + 190, y - 70)
+    pdf.drawString(rx, y, "Firma del jefe autorizador")
+    if datos.get("jefe_firma"):
+        pdf.drawImage(ImageReader(BytesIO(base64.b64decode(datos["jefe_firma"]))), rx, y-85, width=180, height=80, preserveAspectRatio=True, mask="auto")
+    else:
+        pdf.setFont("Helvetica", 9)
+        pdf.drawString(rx, y-35, "Sin autorización registrada")
     pdf.setFont("Helvetica", 9)
-    pdf.drawString(rx, y - 90, datos["responsable"][:45])
+    pdf.drawString(rx, y-90, str(datos.get("jefe_usuario") or "Registro anterior")[:35])
+    pdf.drawString(rx, y-104, str(datos.get("jefe_fecha") or ""))
 
     pdf.setFont("Helvetica-Oblique", 8)
     pdf.drawString(margen, 35, "Registro generado por el Sistema de Control de Uniformes.")
@@ -763,6 +774,11 @@ def generar_pdf_acuse(datos):
 
 def mostrar_acuse(datos):
     """Muestra el acuse recién generado y el botón para PDF."""
+    datos = dict(datos)
+    with conectar() as con:
+        jefe = con.execute("SELECT jefe_usuario,jefe_fecha,jefe_firma FROM entregas WHERE id=?", (datos["folio"],)).fetchone()
+    if jefe:
+        datos.update(zip(("jefe_usuario","jefe_fecha","jefe_firma"), jefe))
     st.subheader("🧾 Acuse de entrega")
     st.success("✅ La entrega fue registrada y la firma quedó guardada.")
     st.info("♻️ ACUSE DIGITAL: no es necesario imprimir. Puedes conservarlo como registro digital y descargar el PDF solo si necesitas enviarlo o archivarlo.")
@@ -796,6 +812,12 @@ def mostrar_acuse(datos):
                 st.info("Firma digital registrada.")
 
     st.divider()
+    st.markdown("### Firma del jefe autorizador")
+    if datos.get("jefe_firma"):
+        st.write(f"Autorizó: {datos['jefe_usuario']} | {datos['jefe_fecha']}")
+        st.image(BytesIO(base64.b64decode(datos["jefe_firma"])), width=320)
+    else:
+        st.warning("Registro sin firma de autorización del jefe.")
     st.markdown("### 🧾 Confirmación")
     st.write("Declaro haber recibido las prendas indicadas anteriormente.")
 
@@ -1228,6 +1250,31 @@ if opcion != "__inicio__" and opcion not in opciones:
 st.sidebar.divider()
 st.sidebar.write(f"**{rol}**")
 st.sidebar.caption(st.session_state.usuario)
+
+# Monitor de existencias: solo Administrador, sin modificar registros.
+if rol == "Administrador":
+    @st.fragment(run_every="60s")
+    def monitor_abastecimiento_tng():
+        with conectar() as con:
+            filas = con.execute("""SELECT nombre,talla,existencia,minimo
+                FROM prendas WHERE activo=1 AND (existencia<=0 OR existencia<=minimo)
+                ORDER BY existencia ASC,nombre,talla""").fetchall()
+        agotadas = [f for f in filas if f[2]<=0]
+        bajas = [f for f in filas if f[2]>0]
+        if agotadas:
+            st.error(f"🔴 Inventario agotado: {len(agotadas)} referencias sin existencias.")
+        if bajas:
+            st.warning(f"🟡 Stock bajo: {len(bajas)} referencias requieren abastecimiento.")
+        if filas:
+            with st.expander("Ver prendas y tallas que requieren atención"):
+                import pandas as pd
+                tabla = pd.DataFrame(filas, columns=["Prenda","Talla","Existencia","Mínimo"])
+                tabla["Estado"] = [semaforo(f[2],f[3]) for f in filas]
+                st.dataframe(tabla, hide_index=True, use_container_width=True)
+        else:
+            st.caption("Sin alertas de abastecimiento en las referencias activas.")
+    monitor_abastecimiento_tng()
+
 
 if st.sidebar.button(
     "🚪 Cerrar sesión",
@@ -1704,11 +1751,11 @@ elif opcion == "📨 Solicitudes a Almacén":
                   try:
                       con.execute("""INSERT INTO solicitudes_almacen
                           (empleado_id,prenda_id,cantidad,motivo,observaciones,fecha_solicitud,solicitado_por,area_solicitante,estado)
-                          VALUES (?,?,?,?,?,?,?,?,?)""", (emps[emp_key][0], prendas_sel[pre_key][0], int(cant), motivo, obs.strip(), ahora(), st.session_state.usuario, st.session_state.area if rol == "Solicitante de área" else emps[emp_key][4], "Por autorizar" if rol == "Solicitante de área" else "Pendiente"))
+                          VALUES (?,?,?,?,?,?,?,?,?)""", (emps[emp_key][0], prendas_sel[pre_key][0], int(cant), motivo, obs.strip(), ahora(), st.session_state.usuario, st.session_state.area if rol == "Solicitante de área" else emps[emp_key][4], "Por autorizar"))
                       folio = con.execute("SELECT last_insert_rowid()").fetchone()[0]
                       con.commit()
                       registrar_bitacora("Solicitudes a Almacén", "Nueva solicitud", f"Solicitud #{folio}")
-                      st.success(f"Solicitud #{folio} registrada. Estado: {'Por autorizar' if rol == 'Solicitante de área' else 'Pendiente'}.")
+                      st.success(f"Solicitud #{folio} registrada. Estado: Por autorizar.")
                   except Exception as exc:
                       con.rollback(); st.error(f"No se pudo registrar: {exc}")
                   finally:
@@ -1746,7 +1793,9 @@ elif opcion == "📨 Solicitudes a Almacén":
             st.write(f"**Avance:** {parcial_hist} de {cantidad_sol} unidades | **Pendiente:** {max(0,cantidad_sol-parcial_hist)}")
             if historial:
                 st.dataframe([{'Acuse / entrega':h[0],'Cantidad':h[1],'Fecha':h[2],'Responsable':h[3]} for h in historial],hide_index=True,use_container_width=True)
-            if rol == "Administrador" and estado_sol == "Por autorizar":
+            with conectar() as cauth:
+                autorizada = cauth.execute("SELECT 1 FROM autorizaciones_firmadas WHERE solicitud_id=? AND length(firma)>0", (sid,)).fetchone()
+            if rol == "Administrador" and estado_sol in ("Por autorizar", "Pendiente", "Preparada", "Parcial") and not autorizada:
                 st.caption("Para autorizar se requiere firma manuscrita del responsable. El rechazo no requiere firma.")
                 firma_aut_canvas = None
                 if st_canvas is not None:
@@ -1771,9 +1820,9 @@ elif opcion == "📨 Solicitudes a Almacén":
                     else:
                         con = conectar()
                         try:
-                            estado_nuevo = "Pendiente" if autorizar_area else "Rechazada"
+                            estado_nuevo = ("Pendiente" if estado_sol == "Por autorizar" else estado_sol) if autorizar_area else "Rechazada"
                             cur = con.execute("""UPDATE solicitudes_almacen SET estado=?, autorizado_por=?, fecha_autorizacion=?, respuesta=?
-                                WHERE id=? AND estado='Por autorizar'""", (estado_nuevo,st.session_state.usuario,ahora(),comentario_rl.strip(),sid))
+                                WHERE id=? AND estado=?""", (estado_nuevo,st.session_state.usuario,ahora(),comentario_rl.strip(),sid,estado_sol))
                             if cur.rowcount and autorizar_area:
                                 con.execute("""INSERT INTO autorizaciones_firmadas(solicitud_id,usuario,fecha,firma,comentario)
                                     VALUES (?,?,?,?,?)""",(sid,st.session_state.usuario,ahora(),
@@ -1786,7 +1835,7 @@ elif opcion == "📨 Solicitudes a Almacén":
                         except Exception as exc:
                             con.rollback(); st.error(str(exc))
                         finally: con.close()
-            if rol == "Almacén" and estado_sol == "Pendiente":
+            if rol == "Almacén" and estado_sol == "Pendiente" and autorizada:
                 st.write(f"Existencia actual: {stock_sol}")
                 with st.form(f"revision_sol_{sid}"):
                     respuesta = st.text_area("Comentario de revisión", key=f"resp_{sid}")
@@ -1812,7 +1861,7 @@ elif opcion == "📨 Solicitudes a Almacén":
                         except Exception as exc:
                             con.rollback(); st.error(str(exc))
                         finally: con.close()
-            if rol == "Almacén" and estado_sol in ("Preparada", "Parcial"):
+            if rol == "Almacén" and estado_sol in ("Preparada", "Parcial") and autorizada:
                 con_tmp=conectar()
                 entregada_tmp=con_tmp.execute("SELECT cantidad_entregada FROM solicitudes_almacen WHERE id=?",(sid,)).fetchone()[0]
                 con_tmp.close()
@@ -1841,6 +1890,9 @@ elif opcion == "📨 Solicitudes a Almacén":
                                 actual = con.execute("SELECT estado, empleado_id, prenda_id, cantidad FROM solicitudes_almacen WHERE id=?", (sid,)).fetchone()
                                 if not actual or actual[0] not in ("Preparada", "Parcial"):
                                     raise ValueError("La solicitud ya fue procesada o cambió de estado.")
+                                autorizacion = con.execute("SELECT usuario,fecha,firma FROM autorizaciones_firmadas WHERE solicitud_id=? AND length(firma)>0", (sid,)).fetchone()
+                                if not autorizacion:
+                                    raise ValueError("Falta la firma de autorización del Administrador.")
                                 entregado_previo=con.execute("SELECT cantidad_entregada FROM solicitudes_almacen WHERE id=?",(sid,)).fetchone()[0]
                                 if cantidad_parcial > actual[3]-entregado_previo:
                                     raise ValueError("La cantidad supera el saldo pendiente.")
@@ -1853,6 +1905,7 @@ elif opcion == "📨 Solicitudes a Almacén":
                                     VALUES (?,?,?,?,?,1,?,?,?)""", (actual[1],actual[2],cantidad_parcial,fecha_hora,st.session_state.usuario,
                                     f"Solicitud de Almacén #{sid}. {obs_sol}",firma_sol,fecha_hora))
                                 folio_ent = cur.lastrowid
+                                con.execute("UPDATE entregas SET jefe_usuario=?, jefe_fecha=?, jefe_firma=? WHERE id=?", (*autorizacion, folio_ent))
                                 con.execute("""INSERT INTO movimientos (prenda_id,tipo,cantidad,fecha,usuario,descripcion)
                                     VALUES (?, 'SALIDA', ?, ?, ?, ?)""", (actual[2],cantidad_parcial,fecha_hora,st.session_state.usuario,f"Entrega por solicitud #{sid}; entrega #{folio_ent}"))
                                 nuevo_total=entregado_previo+cantidad_parcial
@@ -2380,60 +2433,7 @@ elif opcion == "🏭 Almacén":
                     finally: conexion.close()
 
     with tab_sal:
-        st.subheader("📤 Salida de almacén / entrega al trabajador")
-        if st_canvas is None:
-            st.error("⚠️ Falta la función de firma digital.")
-            st.code("python -m pip install streamlit-drawable-canvas pillow reportlab", language="powershell")
-        else:
-            conexion = conectar(); cursor = conexion.cursor()
-            cursor.execute("SELECT id, numero_empleado, nombre, puesto, area, disciplina, COALESCE(tipo_trabajador, 'Sin clasificar') FROM empleados WHERE activo = 1 ORDER BY nombre")
-            empleados = cursor.fetchall()
-            cursor.execute("SELECT id, nombre, talla, existencia FROM prendas WHERE activo = 1 ORDER BY nombre, talla")
-            prendas = cursor.fetchall(); conexion.close()
-            if not empleados:
-                st.warning("⚠️ Primero registra trabajadores.")
-            elif not prendas:
-                st.warning("⚠️ Primero registra prendas.")
-            else:
-                empleados_d = {f"{e[1]} - {e[2]} ({e[6]})": e for e in empleados}
-                prendas_d = {f"{p[1]} - Talla {p[2]} - Disponible: {p[3]}": p for p in prendas}
-                empleado_txt = st.selectbox("Trabajador (Matrícula) *", list(empleados_d.keys()), key="alm_emp")
-                empleado = empleados_d[empleado_txt]
-                prenda_txt = st.selectbox("Prenda *", list(prendas_d.keys()), key="alm_prenda")
-                prenda = prendas_d[prenda_txt]
-                c1,c2 = st.columns(2)
-                with c1: cantidad_sal = st.number_input("Cantidad *", min_value=1, value=1, step=1, key="alm_cant")
-                with c2: fecha_sal = st.date_input("Fecha de salida", key="alm_fecha")
-                responsable_sal = st.text_input("Responsable de entrega *", value=st.session_state.usuario, key="alm_resp")
-                obs_sal = st.text_area("Observaciones", key="alm_obs")
-                st.markdown("### ✍️ Firma del trabajador")
-                st.info("El trabajador debe firmar antes de confirmar la salida.")
-                canvas = st_canvas(fill_color="rgba(255,255,255,0)", stroke_width=3, stroke_color="#111111", background_color="#FFFFFF", height=220, width=700, drawing_mode="freedraw", display_toolbar=True, key="firma_almacen")
-                confirmar = st.button("✅ Registrar salida y guardar firma", use_container_width=True, key="alm_confirmar")
-                if confirmar:
-                    firma = firma_a_base64(canvas.image_data if canvas else None)
-                    if not responsable_sal.strip(): st.error("❌ Indica el responsable de entrega.")
-                    elif not firma: st.error("❌ El trabajador debe realizar su firma.")
-                    elif prenda[3] < cantidad_sal: st.error(f"❌ Inventario insuficiente. Disponible: {prenda[3]}.")
-                    else:
-                        conexion = conectar(); cursor = conexion.cursor()
-                        try:
-                            fecha_hora = f"{fecha_sal} {datetime.now().strftime('%H:%M:%S')}"
-                            nueva = prenda[3] - cantidad_sal
-                            cursor.execute("UPDATE prendas SET existencia = ? WHERE id = ?", (nueva, prenda[0]))
-                            cursor.execute("""INSERT INTO entregas (empleado_id,prenda_id,cantidad,fecha,responsable,acuse,observaciones,firma,firma_fecha) VALUES (?,?,?, ?,?,1,?,?,?)""", (empleado[0],prenda[0],cantidad_sal,fecha_hora,responsable_sal.strip(),obs_sal.strip(),firma,fecha_hora))
-                            folio = cursor.lastrowid
-                            cursor.execute("""INSERT INTO movimientos (prenda_id,tipo,cantidad,fecha,usuario,descripcion) VALUES (?, 'SALIDA', ?, ?, ?, ?)""", (prenda[0],cantidad_sal,fecha_hora,st.session_state.usuario,"Salida de almacén con firma del trabajador"))
-                            conexion.commit()
-                            st.session_state.ultimo_acuse={"folio":folio,"matricula":empleado[1],"nombre":empleado[2],"puesto":empleado[3],"area":empleado[4],"disciplina":empleado[5] or "","prenda":prenda[1],"talla":prenda[2],"cantidad":cantidad_sal,"fecha":fecha_hora,"responsable":responsable_sal.strip(),"observaciones":obs_sal.strip(),"firma":firma}
-                            st.success("✅ Salida registrada y firma guardada.")
-                            st.info(f"Existencia actual: {nueva}")
-                            st.rerun()
-                        except Exception as e:
-                            conexion.rollback(); st.error(f"❌ Error: {e}")
-                        finally: conexion.close()
-                if st.session_state.get("ultimo_acuse") is not None:
-                    st.divider(); mostrar_acuse(st.session_state.ultimo_acuse)
+        st.info("Para registrar una salida con doble firma, abre Dotaciones → Solicitudes a Almacén.")
 
     with tab_mov:
         st.subheader("📋 Historial de movimientos")
@@ -2452,149 +2452,33 @@ elif opcion == "🏭 Almacén":
 elif opcion == "📦 Entregas":
 
     st.title("📦 Registro de Entregas de Uniformes")
-    st.write("Selecciona al empleado, registra el uniforme y captura la firma del empleado.")
-
-    if st_canvas is None:
-        st.error("⚠️ Falta instalar la función de firma digital.")
-        st.code("python -m pip install streamlit-drawable-canvas pillow reportlab", language="powershell")
-        st.stop()
-
-    conexion = conectar()
-    cursor = conexion.cursor()
-    cursor.execute("SELECT id, numero_empleado, nombre, puesto, area, COALESCE(tipo_trabajador, 'Sin clasificar') FROM empleados WHERE activo = 1 ORDER BY nombre")
-    empleados = cursor.fetchall()
-    cursor.execute("SELECT id, nombre, talla, existencia FROM prendas WHERE activo = 1 ORDER BY nombre, talla")
-    prendas = cursor.fetchall()
+    st.info("Las nuevas entregas se registran en Dotaciones → Solicitudes a Almacén, con autorización previa y firma del trabajador.")
+    st.divider()
+    st.subheader("📋 Historial de entregas")
+    conexion = conectar(); cursor = conexion.cursor()
+    cursor.execute("SELECT DISTINCT talla FROM prendas WHERE activo=1 ORDER BY talla")
+    tallas = [x[0] for x in cursor.fetchall() if x[0]]
+    cursor.execute("SELECT DISTINCT disciplina FROM empleados WHERE activo=1 AND disciplina IS NOT NULL AND disciplina != '' ORDER BY disciplina")
+    disciplinas = [x[0] for x in cursor.fetchall()]
     conexion.close()
-
-    if not empleados:
-        st.warning("⚠️ Primero registra empleados.")
-    elif not prendas:
-        st.warning("⚠️ Primero registra prendas en inventario.")
-    else:
-        empleados_dict = {f"{e[1]} - {e[2]} ({e[5]})": e for e in empleados}
-        prendas_dict = {f"{p[1]} - Talla {p[2]} - Disponible: {p[3]}": p for p in prendas}
-
-        izquierda, derecha = st.columns([1.05, 0.95])
-
-        with izquierda:
-            st.subheader("📋 Datos de la entrega")
-            empleado_texto = st.selectbox("Empleado (Matrícula) *", list(empleados_dict.keys()))
-            empleado = empleados_dict[empleado_texto]
-            prenda_texto = st.selectbox("Prenda *", list(prendas_dict.keys()))
-            prenda = prendas_dict[prenda_texto]
-
-            c1, c2 = st.columns(2)
-            with c1:
-                cantidad = st.number_input("Cantidad *", min_value=1, value=1, step=1)
-            with c2:
-                fecha_entrega = st.date_input("Fecha de entrega")
-
-            responsable = st.text_input("Responsable de entrega *", value=st.session_state.usuario)
-            observaciones = st.text_area("Observaciones")
-
-            st.subheader("✍️ Firma del empleado")
-            st.info("El empleado debe firmar dentro del recuadro.")
-            canvas_result = st_canvas(
-                fill_color="rgba(255, 255, 255, 0)",
-                stroke_width=3,
-                stroke_color="#111111",
-                background_color="#FFFFFF",
-                height=220,
-                width=700,
-                drawing_mode="freedraw",
-                display_toolbar=True,
-                key="firma_entrega"
-            )
-
-            confirmar = st.button("✅ Confirmar entrega y guardar firma", use_container_width=True)
-
-            if confirmar:
-                datos_firma = canvas_result.image_data if canvas_result else None
-                firma = firma_a_base64(datos_firma)
-                if not responsable.strip():
-                    st.error("❌ Indica el responsable de entrega.")
-                elif not firma:
-                    st.error("❌ El empleado debe realizar su firma.")
-                elif prenda[3] < cantidad:
-                    st.error(f"❌ Inventario insuficiente. Disponible: {prenda[3]}.")
-                else:
-                    conexion = conectar()
-                    cursor = conexion.cursor()
-                    try:
-                        fecha_hora = f"{fecha_entrega} {datetime.now().strftime('%H:%M:%S')}"
-                        nueva_existencia = prenda[3] - cantidad
-                        cursor.execute("UPDATE prendas SET existencia = ? WHERE id = ?", (nueva_existencia, prenda[0]))
-                        cursor.execute("""
-                            INSERT INTO entregas
-                            (empleado_id, prenda_id, cantidad, fecha, responsable, acuse, observaciones, firma, firma_fecha)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (empleado[0], prenda[0], cantidad, fecha_hora, responsable.strip(), 1, observaciones.strip(), firma, fecha_hora))
-                        cursor.execute("""
-                            INSERT INTO movimientos
-                            (prenda_id, tipo, cantidad, fecha, usuario, descripcion)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, (prenda[0], "SALIDA", cantidad, fecha_hora, st.session_state.usuario, "Entrega de uniforme con firma digital"))
-                        folio = cursor.lastrowid
-                        conexion.commit()
-
-                        datos = {
-                            "folio": folio,
-                            "matricula": empleado[1],
-                            "nombre": empleado[2],
-                            "puesto": empleado[3],
-                            "area": empleado[4],
-                            "prenda": prenda[1],
-                            "talla": prenda[2],
-                            "cantidad": cantidad,
-                            "fecha": fecha_hora,
-                            "responsable": responsable.strip(),
-                            "observaciones": observaciones.strip(),
-                            "firma": firma,
-                        }
-                        st.session_state.ultimo_acuse = datos
-                        st.session_state.firma_key = st.session_state.get("firma_key", 0) + 1
-                        st.success("✅ Entrega registrada correctamente.")
-                        st.rerun()
-                    except Exception as error:
-                        conexion.rollback()
-                        st.error(f"❌ Error al registrar la entrega: {error}")
-                    finally:
-                        conexion.close()
-
-        with derecha:
-            st.subheader("🧾 Acuse de entrega")
-            if st.session_state.get("ultimo_acuse") is not None:
-                mostrar_acuse(st.session_state.ultimo_acuse)
-            else:
-                st.info("Después de confirmar la entrega y la firma, aquí aparecerá el acuse digital. No es necesario imprimirlo.")
-
-        st.divider()
-        st.subheader("📋 Historial de entregas")
-        conexion = conectar(); cursor = conexion.cursor()
-        cursor.execute("SELECT DISTINCT talla FROM prendas WHERE activo=1 ORDER BY talla")
-        tallas = [x[0] for x in cursor.fetchall() if x[0]]
-        cursor.execute("SELECT DISTINCT disciplina FROM empleados WHERE activo=1 AND disciplina IS NOT NULL AND disciplina != '' ORDER BY disciplina")
-        disciplinas = [x[0] for x in cursor.fetchall()]
-        conexion.close()
-        f1,f2,f3=st.columns(3)
-        with f1: fecha_f = st.date_input("📅 Fecha", value=None, key="f_fecha")
-        with f2: talla_f = st.selectbox("👕 Talla", ["Todas"]+tallas, key="f_talla")
-        with f3: disciplina_f = st.selectbox("🎯 Disciplina", ["Todas"]+disciplinas, key="f_disciplina")
-        conexion=conectar(); cursor=conexion.cursor()
-        q="""SELECT en.id,e.numero_empleado,e.nombre,COALESCE(e.disciplina,''),p.nombre,p.talla,en.cantidad,en.fecha,en.responsable,CASE WHEN en.firma IS NOT NULL AND en.firma!='' THEN 'Sí' ELSE 'No' END FROM entregas en INNER JOIN empleados e ON en.empleado_id=e.id INNER JOIN prendas p ON en.prenda_id=p.id WHERE 1=1"""
-        params=[]
-        if fecha_f: q += " AND date(en.fecha)=?"; params.append(str(fecha_f))
-        if talla_f!="Todas": q += " AND p.talla=?"; params.append(talla_f)
-        if disciplina_f!="Todas": q += " AND e.disciplina=?"; params.append(disciplina_f)
-        q += " ORDER BY en.fecha DESC"
-        cursor.execute(q,params); historial=cursor.fetchall(); conexion.close()
-        if historial:
-            import pandas as pd
-            df=pd.DataFrame(historial,columns=["Folio","Matrícula","Empleado","Disciplina","Prenda","Talla","Cantidad","Fecha","Responsable","Firma"])
-            st.metric("📊 Registros encontrados",len(df))
-            st.dataframe(df,use_container_width=True,hide_index=True)
-        else: st.info("No hay entregas que coincidan con los filtros.")
+    f1,f2,f3=st.columns(3)
+    with f1: fecha_f = st.date_input("📅 Fecha", value=None, key="f_fecha")
+    with f2: talla_f = st.selectbox("👕 Talla", ["Todas"]+tallas, key="f_talla")
+    with f3: disciplina_f = st.selectbox("🎯 Disciplina", ["Todas"]+disciplinas, key="f_disciplina")
+    conexion=conectar(); cursor=conexion.cursor()
+    q="""SELECT en.id,e.numero_empleado,e.nombre,COALESCE(e.disciplina,''),p.nombre,p.talla,en.cantidad,en.fecha,en.responsable,CASE WHEN en.firma IS NOT NULL AND en.firma!='' THEN 'Sí' ELSE 'No' END FROM entregas en INNER JOIN empleados e ON en.empleado_id=e.id INNER JOIN prendas p ON en.prenda_id=p.id WHERE 1=1"""
+    params=[]
+    if fecha_f: q += " AND date(en.fecha)=?"; params.append(str(fecha_f))
+    if talla_f!="Todas": q += " AND p.talla=?"; params.append(talla_f)
+    if disciplina_f!="Todas": q += " AND e.disciplina=?"; params.append(disciplina_f)
+    q += " ORDER BY en.fecha DESC"
+    cursor.execute(q,params); historial=cursor.fetchall(); conexion.close()
+    if historial:
+        import pandas as pd
+        df=pd.DataFrame(historial,columns=["Folio","Matrícula","Empleado","Disciplina","Prenda","Talla","Cantidad","Fecha","Responsable","Firma"])
+        st.metric("📊 Registros encontrados",len(df))
+        st.dataframe(df,use_container_width=True,hide_index=True)
+    else: st.info("No hay entregas que coincidan con los filtros.")
 
 
 # ============================================================
@@ -2856,107 +2740,7 @@ elif opcion == "🔄 Reposiciones":
                         )
 
                     if autorizar:
-
-                        conexion = conectar()
-                        cursor = conexion.cursor()
-
-                        try:
-
-                            cursor.execute("""
-                                SELECT existencia, minimo
-                                FROM prendas
-                                WHERE id = ?
-                            """, (prenda_id,))
-
-                            inventario = cursor.fetchone()
-
-                            if inventario is None:
-
-                                st.error(
-                                    "❌ No se encontró la prenda."
-                                )
-
-                            elif inventario[0] < cantidad:
-
-                                st.error(
-                                    f"❌ No hay inventario suficiente. "
-                                    f"Disponible: {inventario[0]}. "
-                                    f"Solicitado: {cantidad}."
-                                )
-
-                            else:
-
-                                nueva_existencia = (
-                                    inventario[0] - cantidad
-                                )
-
-                                cursor.execute("""
-                                    UPDATE prendas
-                                    SET existencia = ?
-                                    WHERE id = ?
-                                """, (
-                                    nueva_existencia,
-                                    prenda_id
-                                ))
-
-                                cursor.execute("""
-                                    UPDATE reposiciones
-                                    SET
-                                        fecha_entrega = ?,
-                                        autorizado_por = ?,
-                                        entregado_por = ?,
-                                        estado = ?
-                                    WHERE id = ?
-                                """, (
-                                    ahora(),
-                                    st.session_state.usuario,
-                                    st.session_state.usuario,
-                                    "Autorizada",
-                                    reposicion_id
-                                ))
-
-                                cursor.execute("""
-                                    INSERT INTO movimientos
-                                    (prenda_id, tipo, cantidad, fecha,
-                                     usuario, descripcion)
-                                    VALUES (?, ?, ?, ?, ?, ?)
-                                """, (
-                                    prenda_id,
-                                    "REPOSICION",
-                                    cantidad,
-                                    ahora(),
-                                    st.session_state.usuario,
-                                    f"Reposición autorizada. Motivo: {motivo}"
-                                ))
-
-                                conexion.commit()
-                                registrar_bitacora("Reposiciones", "Reposición autorizada", f"Solicitud: {reposicion_id} | Prenda ID: {prenda_id} | Cantidad: {cantidad}")
-
-                                st.success(
-                                    "✅ Reposición autorizada y "
-                                    "descontada del inventario."
-                                )
-
-                                if nueva_existencia <= inventario[1]:
-
-                                    st.warning(
-                                        "⚠️ El inventario llegó "
-                                        "al nivel mínimo."
-                                    )
-
-                        except Exception as error:
-
-                            conexion.rollback()
-
-                            st.error(
-                                f"❌ Error: {error}"
-                            )
-
-                        finally:
-
-                            conexion.close()
-
-                        st.rerun()
+                        st.warning("Para entregar una reposición con doble firma, crea una solicitud de Almacén con el motivo de reposición. Este registro no descuenta existencias.")
 
                     if rechazar:
 
@@ -3777,18 +3561,29 @@ elif opcion == "⚠️ Alertas":
 # ============================================================
 elif opcion == "🚦 Semáforo":
     st.title("🚦 Semáforo de inventario")
-    con=conectar()
-    filas=con.execute("SELECT nombre,talla,existencia,minimo FROM prendas WHERE activo=1 ORDER BY nombre,talla").fetchall()
-    con.close()
+    st.caption("Control por prenda y talla. Configura el mínimo de cada referencia para recibir avisos preventivos.")
+    with conectar() as con:
+        filas = con.execute("SELECT nombre,talla,existencia,minimo FROM prendas WHERE activo=1 ORDER BY existencia,nombre,talla").fetchall()
     import pandas as pd
-    df=pd.DataFrame([{'Prenda':a,'Talla':b,'Existencia':c,'Mínimo':d,'Estado':semaforo(c,d)} for a,b,c,d in filas])
-    if df.empty: st.info('Registra prendas para consultar el semáforo.')
+    df = pd.DataFrame(filas, columns=["Prenda","Talla","Existencia","Mínimo"])
+    if df.empty:
+        st.info("Registra prendas para consultar el semáforo.")
     else:
-        cols=st.columns(3)
-        for col,estado in zip(cols,['🔴 Agotado','🟡 Bajo mínimo','🟢 Disponible']): col.metric(estado,int((df['Estado']==estado).sum()))
-        filtro=st.selectbox('Filtrar por estado',['Todos','🔴 Agotado','🟡 Bajo mínimo','🟢 Disponible'])
-        st.dataframe(df if filtro=='Todos' else df[df['Estado']==filtro],hide_index=True,use_container_width=True)
-    st.caption('Los límites provienen del campo Mínimo configurado en Inventario.')
+        df["Estado"] = [semaforo(f[2],f[3]) for f in filas]
+        estados = ["🔴 Agotado","🟡 Bajo mínimo","🟢 Disponible"]
+        for col, estado in zip(st.columns(3), estados):
+            col.metric(estado, int((df["Estado"] == estado).sum()))
+        c1,c2 = st.columns(2)
+        filtro = c1.selectbox("Estado", ["Todos"]+estados)
+        buscar = c2.text_input("Buscar prenda o talla", key="buscar_semaforo_tng")
+        vista = df if filtro == "Todos" else df[df["Estado"] == filtro]
+        if buscar.strip():
+            vista = vista[vista["Prenda"].str.contains(buscar.strip(),case=False,regex=False) | vista["Talla"].astype(str).str.contains(buscar.strip(),case=False,regex=False)]
+        colores = {estados[0]:"background-color:#fee2e2;color:#991b1b;font-weight:bold",estados[1]:"background-color:#fef3c7;color:#854d0e;font-weight:bold",estados[2]:"background-color:#dcfce7;color:#166534;font-weight:bold"}
+        st.dataframe(vista.style.map(lambda x: colores.get(x,""),subset=["Estado"]),hide_index=True,use_container_width=True)
+        pendientes = df[df["Estado"] != estados[2]]
+        st.download_button("Descargar alertas de abastecimiento (CSV)",pendientes.to_csv(index=False).encode("utf-8-sig"),file_name="TNG_alertas_stock.csv",mime="text/csv")
+    st.caption("Las alertas generales se actualizan cada 60 segundos mientras la aplicación está abierta. No se envían mensajes externos.")
 
 elif opcion == "📅 Próximas dotaciones":
     st.title('📅 Próxima fecha de dotación')
